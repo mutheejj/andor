@@ -3,7 +3,11 @@
   "displayName": "Andor",
   "description": "Advanced AI coding assistant powered by Puter.js — no API keys needed",
   "version": "0.0.1",
-  "publisher": "andor",
+  "publisher": "mutheejj",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mutheejj/andor.git"
+  },
   "engines": {
     "vscode": "^1.109.0"
   },
@@ -12,8 +16,7 @@
     "Machine Learning",
     "Other"
   ],
-  "icon": "assets/icon.png",
-  "activationEvents": [
+    "activationEvents": [
     "onStartupFinished"
   ],
   "main": "./dist/extension.js",

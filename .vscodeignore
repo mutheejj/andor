@@ -1,14 +1,29 @@
-.vscode/**
-.vscode-test/**
-out/**
+# Dependencies (already bundled by webpack)
 node_modules/**
+webview-ui/node_modules/**
+webview-ui/src/**
+webview-ui/package.json
+webview-ui/package-lock.json
+webview-ui/postcss.config.js
+webview-ui/tailwind.config.js
+webview-ui/.vscode/**
+
+# Source files (webpack bundles these)
 src/**
-.gitignore
-.yarnrc
+.vscode/**
+.vscode-test.mjs
+
+# Dev files
+eslint.config.mjs
+tsconfig.json
 webpack.config.js
+*.map
+
+# Misc
+.gitignore
+.vscodeignore
+PROJECT.md
+SECURITY.md
+CONTRIBUTING.md
+CODE_OF_CONDUCT.md
 vsc-extension-quickstart.md
-**/tsconfig.json
-**/eslint.config.mjs
-**/*.map
-**/*.ts
-**/.vscode-test.*
