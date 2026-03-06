@@ -208,9 +208,11 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
 - **Issues**: [GitHub Issues](https://github.com/mutheejj/andor/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/mutheejj/andor/discussions)
 - **Discord**: [Join our server](https://discord.gg/andor) (coming soon)
-- **Email**: [mutheejohnke@gmail.com](mailto:mutheejohnke@gmail.com)
+- **Email**: [johnmuthee547@gmail.com](mailto:johnmuthee547@gmail.com)
 - **X/Twitter**: [@mutheejohnke](https://x.com/mutheejohnke)
 - **GitHub**: [@mutheejj](https://github.com/mutheejj)
+- **Discord**: [@johnmuthee](https://discord.com/users/johnmuthee)
+- **Phone**: +254 768 498 013
 
 ---
 
