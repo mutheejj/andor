@@ -49,7 +49,10 @@ export interface ChatMessage {
 }
 
 export interface WebviewToExtensionMessage {
-  type: 'sendMessage' | 'applyCode' | 'requestDiff' | 'clearHistory' | 'getContext' | 'openExternal' | 'startPuterAuth' | 'logout' | 'runTerminal' | 'writeFile' | 'readFile';
+  type: 'sendMessage' | 'applyCode' | 'requestDiff' | 'clearHistory' | 'getContext' | 'openExternal' | 'startPuterAuth' | 'logout' | 'runTerminal' | 'writeFile' | 'readFile'
+    | 'getProviders' | 'setApiKey' | 'deleteApiKey' | 'testProvider' | 'getModels' | 'selectModel'
+    | 'approveCommand' | 'denyCommand' | 'alwaysAllowCommand'
+    | 'openSettings' | 'streamWithProvider';
   text?: string;
   model?: string;
   images?: string[];
@@ -59,10 +62,45 @@ export interface WebviewToExtensionMessage {
   url?: string;
   command?: string;
   content?: string;
+  providerId?: string;
+  apiKey?: string;
+  commandId?: string;
+  pattern?: string;
+  showPaid?: boolean;
+  systemPrompt?: string;
+  history?: Array<{ role: string; content: string }>;
+}
+
+export interface ProviderInfo {
+  id: string;
+  name: string;
+  hasKey: boolean;
+  modelCount: number;
+  status: 'configured' | 'unconfigured' | 'untested';
+}
+
+export interface ModelInfo {
+  id: string;
+  name: string;
+  providerId: string;
+  providerName: string;
+  contextWindow: number;
+  free: boolean;
+  bestFor: string;
+  tier: 'fast' | 'balanced' | 'powerful';
+}
+
+export interface CommandApprovalRequest {
+  commandId: string;
+  command: string;
+  description: string;
 }
 
 export interface ExtensionToWebviewMessage {
-  type: 'response' | 'responseChunk' | 'responseDone' | 'context' | 'diagnostics' | 'error' | 'diffResult' | 'historyCleared' | 'puterToken' | 'terminalResult' | 'fileWritten' | 'fileContent';
+  type: 'response' | 'responseChunk' | 'responseDone' | 'context' | 'diagnostics' | 'error' | 'diffResult' | 'historyCleared' | 'puterToken' | 'terminalResult' | 'fileWritten' | 'fileContent'
+    | 'providers' | 'models' | 'providerTestResult' | 'apiKeyStored' | 'apiKeyDeleted'
+    | 'commandApproval' | 'commandResult'
+    | 'streamChunk' | 'streamDone' | 'streamError';
   text?: string;
   files?: ContextFile[];
   diagnostics?: DiagnosticEntry[];
@@ -73,6 +111,14 @@ export interface ExtensionToWebviewMessage {
   exitCode?: number;
   filePath?: string;
   content?: string;
+  providers?: ProviderInfo[];
+  models?: ModelInfo[];
+  providerId?: string;
+  success?: boolean;
+  commandApproval?: CommandApprovalRequest;
+  commandId?: string;
+  model?: string;
+  provider?: string;
 }
 
 export interface ContextFile {
@@ -88,41 +134,13 @@ export interface DiffResult {
   newContent: string;
 }
 
-export type SupportedModel =
-  | 'claude-sonnet-4'
-  | 'claude-opus-4'
-  | 'claude-haiku-4'
-  | 'gpt-4o'
-  | 'gpt-4o-mini'
-  | 'gpt-4-1'
-  | 'o3-mini'
-  | 'gemini-2-5-pro'
-  | 'gemini-2-5-flash'
-  | 'deepseek-v3'
-  | 'deepseek-r1'
-  | 'llama-4-maverick'
-  | 'llama-4-scout'
-  | 'mistral-large';
-
-export interface ModelOption {
-  id: SupportedModel;
-  label: string;
-  tag: string;
+export interface AllowlistEntry {
+  pattern: string;
+  addedAt: string;
+  addedBy: 'user' | 'auto';
 }
 
-export const AVAILABLE_MODELS: ModelOption[] = [
-  { id: 'claude-sonnet-4', label: 'Claude Sonnet 4', tag: 'Recommended' },
-  { id: 'claude-opus-4', label: 'Claude Opus 4', tag: 'Most capable' },
-  { id: 'claude-haiku-4', label: 'Claude Haiku 4', tag: 'Fast & efficient' },
-  { id: 'gpt-4o', label: 'GPT-4o', tag: 'Great for code' },
-  { id: 'gpt-4o-mini', label: 'GPT-4o Mini', tag: 'Fast' },
-  { id: 'gpt-4-1', label: 'GPT-4.1', tag: 'Latest GPT' },
-  { id: 'o3-mini', label: 'o3-mini', tag: 'Reasoning' },
-  { id: 'gemini-2-5-pro', label: 'Gemini 2.5 Pro', tag: 'Recommended' },
-  { id: 'gemini-2-5-flash', label: 'Gemini 2.5 Flash', tag: 'Fast' },
-  { id: 'deepseek-v3', label: 'DeepSeek V3', tag: 'Open source' },
-  { id: 'deepseek-r1', label: 'DeepSeek R1', tag: 'Reasoning' },
-  { id: 'llama-4-maverick', label: 'Llama 4 Maverick', tag: 'Open source' },
-  { id: 'llama-4-scout', label: 'Llama 4 Scout', tag: 'Open source' },
-  { id: 'mistral-large', label: 'Mistral Large', tag: 'Open source' },
-];
+export interface AllowlistFile {
+  version: string;
+  patterns: AllowlistEntry[];
+}
