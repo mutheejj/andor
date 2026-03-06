@@ -1,0 +1,84 @@
+{
+  "name": "andor",
+  "displayName": "Andor",
+  "description": "Advanced AI coding assistant powered by Puter.js — no API keys needed",
+  "version": "0.0.1",
+  "publisher": "andor",
+  "engines": {
+    "vscode": "^1.109.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Machine Learning",
+    "Other"
+  ],
+  "icon": "assets/icon.png",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "andor-sidebar",
+          "title": "Andor",
+          "icon": "$(hubot)"
+        }
+      ]
+    },
+    "views": {
+      "andor-sidebar": [
+        {
+          "type": "webview",
+          "id": "andor.chatView",
+          "name": "Andor Chat"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "andor.openChat",
+        "title": "Andor: Open Chat"
+      },
+      {
+        "command": "andor.clearHistory",
+        "title": "Andor: Clear Chat History"
+      },
+      {
+        "command": "andor.logout",
+        "title": "Andor: Sign Out of Puter"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "webpack",
+    "watch": "webpack --watch",
+    "package": "webpack --mode production --devtool hidden-source-map",
+    "compile-tests": "tsc -p . --outDir out",
+    "watch-tests": "tsc -p . -w --outDir out",
+    "pretest": "npm run compile-tests && npm run compile && npm run lint",
+    "lint": "eslint src",
+    "test": "vscode-test",
+    "build:webview": "cd webview-ui && npm run build"
+  },
+  "dependencies": {
+    "@heyputer/puter.js": "^2.0.0"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "22.x",
+    "@types/vscode": "^1.109.0",
+    "@typescript-eslint/parser": "^8.56.1",
+    "@typescript-eslint/typescript-estree": "^8.56.1",
+    "@vscode/test-cli": "^0.0.12",
+    "@vscode/test-electron": "^2.5.2",
+    "eslint": "^9.39.3",
+    "ts-loader": "^9.5.4",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.56.1",
+    "webpack": "^5.105.3",
+    "webpack-cli": "^6.0.1"
+  }
+}
