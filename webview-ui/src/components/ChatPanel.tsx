@@ -2,6 +2,9 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { CodeBlock } from './CodeBlock';
 import { DiffViewer } from './DiffViewer';
 import { ImageUploader } from './ImageUploader';
+import { CommandApproval } from './CommandApproval';
+import type { CommandApprovalRequest } from './CommandApproval';
+import { TerminalOutput } from './TerminalOutput';
 import { streamChat } from '../lib/puter';
 import type { ChatMessage, ContextFileInfo, PostMessageFn } from '../App';
 
@@ -15,6 +18,10 @@ interface ChatPanelProps {
   postMessage: PostMessageFn;
   pendingSystemPromptRef: React.MutableRefObject<string | null>;
   onCreateCheckpoint: (msgs: ChatMessage[], label: string) => string;
+  isPuterModel: (modelId: string) => boolean;
+  streamingAssistantIdRef: React.MutableRefObject<string | null>;
+  pendingCommandApproval: CommandApprovalRequest | null;
+  onDismissCommandApproval: () => void;
 }
 
 interface DiffState {
@@ -149,6 +156,10 @@ export function ChatPanel({
   postMessage,
   pendingSystemPromptRef,
   onCreateCheckpoint,
+  isPuterModel,
+  streamingAssistantIdRef,
+  pendingCommandApproval,
+  onDismissCommandApproval,
 }: ChatPanelProps) {
   const [inputText, setInputText] = useState('');
   const [uploadedImages, setUploadedImages] = useState<string[]>([]);
@@ -311,9 +322,43 @@ export function ChatPanel({
     setMessages(prev => [...prev, userMessage]);
     setIsLoading(true);
     setTaskComplete(false);
-    pendingChatRef.current = { userText: text, images };
-    postMessage({ type: 'sendMessage', text, model: selectedModel, images });
-  }, [contextFiles, selectedModel, postMessage, setMessages, setIsLoading, onCreateCheckpoint]);
+
+    if (isPuterModel(selectedModel)) {
+      // Puter models: use the existing webview-side flow
+      pendingChatRef.current = { userText: text, images };
+      postMessage({ type: 'sendMessage', text, model: selectedModel, images });
+    } else {
+      // Non-Puter models: create assistant placeholder and stream from extension host
+      const assistantId = crypto.randomUUID();
+      streamingAssistantIdRef.current = assistantId;
+      setMessages(prev => [
+        ...prev,
+        {
+          id: assistantId,
+          role: 'assistant',
+          content: '',
+          timestamp: Date.now(),
+          model: selectedModel,
+          isStreaming: true,
+        },
+      ]);
+
+      // Build history from recent messages
+      const recentMessages = messagesRef.current.slice(-6);
+      const history = recentMessages
+        .filter(m => !m.isStreaming)
+        .map(m => ({ role: m.role, content: m.content }));
+
+      // Request context assembly from extension, then stream
+      postMessage({
+        type: 'streamWithProvider',
+        text,
+        model: selectedModel,
+        images,
+        history,
+      });
+    }
+  }, [contextFiles, selectedModel, postMessage, setMessages, setIsLoading, onCreateCheckpoint, isPuterModel, streamingAssistantIdRef]);
 
   const handleSend = () => {
     const text = inputText.trim();
@@ -551,6 +596,15 @@ export function ChatPanel({
                 )}
               </div>
             ))}
+
+            {/* Command approval dialog */}
+            {pendingCommandApproval && (
+              <CommandApproval
+                request={pendingCommandApproval}
+                postMessage={postMessage}
+                onDismiss={onDismissCommandApproval}
+              />
+            )}
 
             {/* Thinking indicator */}
             {isLoading && messages.length > 0 && messages[messages.length - 1].role === 'user' && (
