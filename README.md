@@ -1,6 +1,12 @@
 # ⬡ Andor
 
+<p align="center">
+  <img src="images/icon.jpeg" alt="Andor Icon" width="128" height="128">
+</p>
+
 > **Advanced AI Coding Agent for VS Code** — Powered by Puter.js, no API keys needed.
+
+![Andor Cover](images/cover.jpeg)
 
 [![VS Code Version](https://img.shields.io/badge/VS%20Code-%5E1.74.0-blue?logo=visual-studio-code)](https://code.visualstudio.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
