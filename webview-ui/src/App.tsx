@@ -1,7 +1,10 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { ChatPanel } from './components/ChatPanel';
 import { ModelSelector } from './components/ModelSelector';
+import type { ModelInfo } from './components/ModelSelector';
+import { SettingsPanel } from './components/SettingsPanel';
 import { getAuthToken, setAuthToken, getUser, signOut } from './lib/puter';
+import type { CommandApprovalRequest } from './components/CommandApproval';
 
 declare global {
   interface Window {
@@ -21,6 +24,7 @@ export interface ChatMessage {
   content: string;
   timestamp: number;
   model?: string;
+  provider?: string;
   images?: string[];
   contextFiles?: string[];
   isStreaming?: boolean;
@@ -53,7 +57,11 @@ export default function App() {
   const [authStatus, setAuthStatus] = useState<{ signedIn: boolean; username?: string }>({ signedIn: false });
   const [authError, setAuthError] = useState<string | null>(null);
   const [showCheckpoints, setShowCheckpoints] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [allModels, setAllModels] = useState<ModelInfo[]>([]);
+  const [pendingCommandApproval, setPendingCommandApproval] = useState<CommandApprovalRequest | null>(null);
   const pendingSystemPromptRef = useRef<string | null>(null);
+  const streamingAssistantIdRef = useRef<string | null>(null);
 
   // Load state from VS Code webview state on mount
   useEffect(() => {
@@ -106,6 +114,12 @@ export default function App() {
     }
   }, []);
 
+  // Fetch models from extension on mount
+  useEffect(() => {
+    postMessage({ type: 'getModels' });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
       const msg = event.data;
@@ -132,13 +146,18 @@ export default function App() {
           setMessages([]);
           setContextFiles([]);
           break;
+        case 'models':
+          if (msg.models && Array.isArray(msg.models)) {
+            setAllModels(msg.models);
+          }
+          break;
         case 'terminalResult':
           setMessages((prev: ChatMessage[]) => [
             ...prev,
             {
               id: crypto.randomUUID(),
               role: 'assistant',
-              content: `\`\`\`bash\n$ (terminal)\n${msg.output ?? ''}\n\`\`\`\nExit code: ${msg.exitCode ?? 0}`,
+              content: `\`\`\`terminal:command\n$ ${msg.command ?? '(terminal)'}\n${msg.output ?? ''}\n\`\`\`\nExit code: ${msg.exitCode ?? 0}`,
               timestamp: Date.now(),
               isStreaming: false,
             },
@@ -156,6 +175,52 @@ export default function App() {
             },
           ]);
           break;
+        case 'commandApproval':
+          if (msg.commandApproval) {
+            setPendingCommandApproval(msg.commandApproval);
+          }
+          break;
+        case 'streamChunk': {
+          // Extension-host provider streaming
+          const assistantId = streamingAssistantIdRef.current;
+          if (assistantId && msg.text != null) {
+            setMessages(prev =>
+              prev.map(m => m.id === assistantId ? { ...m, content: msg.text, isStreaming: true } : m)
+            );
+          }
+          break;
+        }
+        case 'streamDone': {
+          const doneId = streamingAssistantIdRef.current;
+          if (doneId && msg.text != null) {
+            setMessages(prev =>
+              prev.map(m => m.id === doneId ? { ...m, content: msg.text, isStreaming: false, model: msg.model, provider: msg.provider } : m)
+            );
+            setIsLoading(false);
+            streamingAssistantIdRef.current = null;
+          }
+          break;
+        }
+        case 'streamError': {
+          const errId = streamingAssistantIdRef.current;
+          if (errId) {
+            setMessages(prev =>
+              prev.map(m => m.id === errId ? { ...m, content: `Error: ${msg.error}`, isStreaming: false } : m)
+            );
+            setIsLoading(false);
+            streamingAssistantIdRef.current = null;
+          } else {
+            setMessages(prev => [...prev, {
+              id: crypto.randomUUID(),
+              role: 'assistant',
+              content: `Error: ${msg.error}`,
+              timestamp: Date.now(),
+              isStreaming: false,
+            }]);
+            setIsLoading(false);
+          }
+          break;
+        }
         case 'error':
           setIsLoading(false);
           setMessages((prev: ChatMessage[]) => {
@@ -226,6 +291,21 @@ export default function App() {
     postMessage({ type: 'logout' });
   }, [postMessage]);
 
+  // Check if the selected model is a Puter model (handled by webview)
+  const isPuterModel = useCallback((modelId: string): boolean => {
+    const model = allModels.find(m => m.id === modelId);
+    if (!model) { return true; } // Default to Puter for unknown models
+    return model.providerId === 'puter';
+  }, [allModels]);
+
+  if (showSettings) {
+    return (
+      <div className="flex flex-col h-screen overflow-hidden" style={{ background: 'var(--vscode-sideBar-background)', color: 'var(--vscode-sideBar-foreground)' }}>
+        <SettingsPanel postMessage={postMessage} onClose={() => { setShowSettings(false); postMessage({ type: 'getModels' }); }} />
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col h-screen overflow-hidden" style={{ background: 'var(--vscode-sideBar-background)', color: 'var(--vscode-sideBar-foreground)' }}>
       {/* Header */}
@@ -260,6 +340,14 @@ export default function App() {
           >
             + New
           </button>
+          <button
+            onClick={() => setShowSettings(true)}
+            className="text-[10px] px-2 py-1 rounded transition-opacity hover:opacity-100 opacity-70"
+            style={{ background: 'var(--vscode-input-background)', color: 'var(--vscode-foreground)' }}
+            title="Settings"
+          >
+            ⚙
+          </button>
           {authStatus.signedIn ? (
             <button
               onClick={handleSignOut}
@@ -284,7 +372,7 @@ export default function App() {
 
       {/* Model selector */}
       <div className="px-3 py-1.5 flex-shrink-0" style={{ borderBottom: '1px solid var(--vscode-panel-border)' }}>
-        <ModelSelector selected={selectedModel} onChange={setSelectedModel} />
+        <ModelSelector selected={selectedModel} onChange={setSelectedModel} models={allModels} />
       </div>
 
       {/* Checkpoint panel */}
@@ -320,6 +408,10 @@ export default function App() {
           postMessage={postMessage}
           pendingSystemPromptRef={pendingSystemPromptRef}
           onCreateCheckpoint={createCheckpoint}
+          isPuterModel={isPuterModel}
+          streamingAssistantIdRef={streamingAssistantIdRef}
+          pendingCommandApproval={pendingCommandApproval}
+          onDismissCommandApproval={() => setPendingCommandApproval(null)}
         />
       </div>
     </div>
