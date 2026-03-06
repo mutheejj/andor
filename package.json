@@ -2,7 +2,12 @@
   "name": "andor",
   "displayName": "Andor",
   "description": "Advanced AI coding assistant powered by Puter.js — no API keys needed",
-  "version": "0.0.1",
+  "version": "0.1.0",
+  "icon": "images/icon.jpeg",
+  "galleryBanner": {
+    "color": "#1e1e1e",
+    "theme": "dark"
+  },
   "publisher": "mutheejj",
   "repository": {
     "type": "git",
