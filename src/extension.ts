@@ -5,10 +5,12 @@ import { DiagnosticsWatcher } from './indexer/DiagnosticsWatcher';
 import { WebviewBridge } from './webview/WebviewBridge';
 import { PuterCoderViewProvider } from './webview/panel';
 import { PuterAuthServer } from './auth/PuterAuthServer';
+import { initializeProviders, ProviderRegistry } from './providers';
 
 let indexer: WorkspaceIndexer;
 let diagnosticsWatcher: DiagnosticsWatcher;
 let authServer: PuterAuthServer;
+let providerRegistry: ProviderRegistry;
 
 export async function activate(context: vscode.ExtensionContext) {
 	console.log('Andor is activating...');
@@ -19,7 +21,8 @@ export async function activate(context: vscode.ExtensionContext) {
 	diagnosticsWatcher = new DiagnosticsWatcher();
 	const contextAssembler = new ContextAssembler(indexer);
 	authServer = new PuterAuthServer();
-	const bridge = new WebviewBridge(indexer, contextAssembler, diagnosticsWatcher, context, authServer);
+	providerRegistry = initializeProviders(context);
+	const bridge = new WebviewBridge(indexer, contextAssembler, diagnosticsWatcher, context, authServer, providerRegistry);
 
 	const viewProvider = new PuterCoderViewProvider(context.extensionUri, bridge);
 
