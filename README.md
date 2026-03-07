@@ -1,12 +1,6 @@
-# ⬡ Andor
+# Andor
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/mutheejj/andor/main/images/icon.jpeg" alt="Andor Icon" width="128" height="128">
-</p>
-
-> **Advanced AI Coding Agent for VS Code** — Powered by Puter.js, no API keys needed.
-
-![Andor Cover](https://raw.githubusercontent.com/mutheejj/andor/main/images/cover.jpeg)
+> **Advanced AI Coding Agent for VS Code** — Multi-provider AI assistant with live file writes, terminal commands, and full workspace awareness.
 
 [![VS Code Version](https://img.shields.io/badge/VS%20Code-%5E1.74.0-blue?logo=visual-studio-code)](https://code.visualstudio.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -14,54 +8,62 @@
 
 ---
 
-## 🚀 What is Andor?
+## What is Andor?
 
-**Andor** is an intelligent AI coding assistant that lives inside VS Code. Unlike typical AI chatbots, Andor is a **proactive coding agent** that can:
+**Andor** is an intelligent AI coding assistant embedded in VS Code. Unlike typical chatbots, Andor is a **proactive agent** that understands your entire codebase and can take real actions:
 
-- **Read & understand** your entire codebase
-- **Write and modify files** directly
-- **Run terminal commands** (build, test, install)
+- **Read & understand** your entire workspace (100+ files)
+- **Write and modify files** automatically during AI streaming
+- **Run terminal commands** (build, test, install, git)
 - **Debug errors** with full diagnostic context
-- **Refactor code** safely across multiple files
-- **Continue complex tasks** across multiple prompts
-
-All without needing API keys — just sign in with [Puter](https://puter.com) and start coding.
+- **Refactor safely** across multiple files without breaking dependencies
+- **Continue complex tasks** across multiple prompts with checkpoints
 
 ---
 
-## ✨ Features
+## Key Features
 
-### 🤖 AI-Powered Coding
-- **Multiple AI Models**: Claude Sonnet 4, Claude Opus 4, GPT-4o, Gemini 2.5 Pro, DeepSeek V3, Llama 4, and more
-- **Free Tier Models**: Use GPT-4o Mini, Gemini Flash, DeepSeek, and Llama models at no cost
-- **No API Keys**: Authenticate once with Puter, no configuration needed
+### Multi-Provider AI Support
+- **Puter.js** — Free tier with Claude, GPT-4o, Gemini, DeepSeek, Llama (no API key needed)
+- **NVIDIA NIM** — High-performance models (Kimi K2, DeepSeek, Llama, Qwen, Codestral)
+- **OpenRouter** — Access to 100+ AI models
+- **Google Gemini** — Direct Gemini API support
+- **Custom Providers** — Bring your own API keys
 
-### 🛠️ Agent Capabilities
-- **File Operations**: Create, read, update files with `write:path` blocks
-- **Terminal Integration**: Run commands with `run` blocks
-- **Smart Context**: Automatically includes relevant files from your workspace
-- **Diagnostics Aware**: Sees errors and warnings in real-time
-- **Multi-step Tasks**: Handles complex refactors that span multiple files
+### Agent Capabilities
+- **Live File Writes** — Files are written instantly as AI streams `write:path` blocks (no manual Apply needed)
+- **Terminal Integration** — Execute commands with live output display
+- **Smart Context Assembly** — Automatically includes relevant files, filtered by relevance score
+- **Full Workspace Awareness** — AI sees your complete file tree (grouped by directory)
+- **Diagnostics Integration** — Real-time errors and warnings in context
+- **Multi-file Coordination** — AI understands dependencies and updates all affected files
 
-### 🔄 Advanced Workflow
-- **Checkpoints**: Auto-saved conversation states — revert anytime
-- **Prompt Editing**: Edit and resend previous messages
-- **Task Completion Detection**: Knows when a task is done or needs to continue
-- **Continue Button**: Resume complex multi-step operations
+### Advanced Settings Panel
+- **Memory Management** — Learned patterns and project context
+- **Workspace Indexing** — Full project indexing with progress tracking
+- **API Key Management** — Secure storage for all provider keys
+- **Web Search** — Brave Search API integration for documentation lookup
+- **Vision Support** — Image processing capabilities
 
-### 🎨 Modern UI
-- **Windsurf-like Interface**: Clean, modern, distraction-free design
-- **Sticky Headers**: Always-visible controls even when scrolling
-- **Syntax Highlighting**: Beautiful code blocks with language detection
-- **Dark/Light Theme**: Adapts to your VS Code theme automatically
+### Workflow Features
+- **Checkpoints** — Auto-saved conversation states, revert anytime
+- **Task Completion Detection** — AI knows when work is done
+- **Continue Button** — Resume multi-step operations
+- **Prompt Editing** — Edit and resend previous messages
+- **Command Approval** — Safety controls for destructive commands
+
+### Chat Modes
+- **Agent Mode** — Full capabilities: files, terminal, edits
+- **Chat Mode** — Discussion only, no file modifications
+- **Thinking Mode** — Step-by-step reasoning before acting
 
 ---
 
-## 📦 Installation
+## Installation
 
-### From VS Code Marketplace (Coming Soon)
+### From VS Code Marketplace
 ```
-Search "Andor" in VS Code Extensions
+Search "Andor" in VS Code Extensions and click Install
 ```
 
 ### From Source
@@ -85,43 +87,46 @@ F5  # Opens a new VS Code window with the extension loaded
 
 ---
 
-## 🎯 Quick Start
+## Quick Start
 
-1. **Open the Andor panel**: Click the Andor icon in the left sidebar or run `Andor: Open Chat` from the command palette
+1. **Open Andor**: Click the Andor icon in the left sidebar or run `Andor: Open Chat` from the command palette
 
-2. **Sign in**: Click "Sign in" and authenticate with Puter (takes 10 seconds)
+2. **Choose a Model**: Select from Puter (free), NVIDIA, OpenRouter, or configure your own API keys
 
-3. **Start coding**: Ask Andor anything:
+3. **Start Coding**:
    - *"Refactor this component to use hooks"*
    - *"Fix the TypeScript errors in src/utils"*
    - *"Create a new API endpoint for user authentication"*
-   - *"Explain how this codebase works"*
+   - *"Run npm test and fix any failing tests"*
 
-4. **Watch it work**: Andor will analyze, plan, and execute — writing files and running commands as needed
+4. **Watch it work**: Andor analyzes, plans, writes files, and runs commands automatically
 
 ---
 
-## 💡 Usage Examples
+## Usage Examples
 
-### Refactoring
+### Multi-File Refactoring
 ```
-"Refactor all class components in src/components to functional components with hooks"
+"Convert all class components in src/components to functional components with hooks"
 ```
 Andor will:
-1. Find all class components
-2. Plan the conversion
-3. Write the updated files
-4. Report what changed
+1. Scan all files in src/components
+2. Identify class components
+3. Plan the conversion
+4. Write updated files in dependency order
+5. Update imports across all affected files
+6. Run build to verify
 
-### Debugging
+### Debugging with Context
 ```
 "I'm getting a 'Cannot find module' error when importing utils"
 ```
 Andor will:
 1. Check your imports and file structure
-2. Look at the diagnostics
-3. Suggest or apply fixes
-4. Run the build to verify
+2. Look at real-time diagnostics
+3. Examine the workspace index for file locations
+4. Suggest or apply fixes
+5. Run the build to verify
 
 ### New Features
 ```
@@ -130,103 +135,132 @@ Andor will:
 Andor will:
 1. Find the settings component
 2. Add the toggle UI
-3. Implement the state management
+3. Implement state management
 4. Apply theme changes
+5. Update related files
+
+### Terminal Commands
+```
+"Run the test suite and tell me what's failing"
+```
+Andor will:
+1. Execute `npm test` or your test command
+2. Parse the output for errors
+3. Identify failing tests
+4. Suggest fixes or apply them directly
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
 ```
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│   VS Code       │────▶│  Extension Host │────▶│   Puter AI      │
-│   Webview UI    │◄────│  (Node.js)      │◄────│   (Claude,      │
-│   (React)       │     │                 │     │    GPT, etc.)   │
+│   VS Code       │────▶│  Extension Host │────▶│   AI Providers  │
+│   Webview UI    │◄────│  (Node.js)      │◄────│   (Puter,       │
+│   (React)       │     │                 │     │    NVIDIA, etc) │
 └─────────────────┘     └─────────────────┘     └─────────────────┘
         │                       │
         ▼                       ▼
 ┌─────────────────┐     ┌─────────────────┐
 │  Workspace      │     │  File System    │
-│  Indexer        │     │  Operations     │
+│  Indexer        │     │  & Terminal     │
 └─────────────────┘     └─────────────────┘
 ```
 
-- **Webview UI**: React + TypeScript + Tailwind CSS
-- **Extension Host**: VS Code API, file system, terminal access
-- **Workspace Indexer**: Real-time file tracking, symbols, imports
-- **Context Assembler**: Intelligent file selection for AI context
+- **Webview UI**: React + TypeScript + Tailwind CSS with streaming support
+- **Extension Host**: VS Code API, file system, terminal access, SecretStorage
+- **Workspace Indexer**: Full project indexing with language detection
+- **Context Assembler**: Intelligent file scoring and selection
+- **Provider Registry**: Multi-provider model management with fallback
 
 ---
 
-## 🤝 Contributing
+## Configuration
 
-We welcome contributors! Whether you're fixing a bug, adding a feature, or improving documentation, your help is appreciated.
+### Setting up API Keys
+1. Open Andor Settings (⚙ icon)
+2. Navigate to the provider tab
+3. Enter your API key (securely stored in VS Code SecretStorage)
+4. Test the connection
 
-### Getting Started
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/amazing-feature`
-3. Make your changes
-4. Run tests: `npm test`
-5. Commit: `git commit -m 'Add amazing feature'`
-6. Push: `git push origin feature/amazing-feature`
-7. Open a Pull Request
+### Supported Providers
+- **Puter** — Free tier available, sign in with Puter account
+- **NVIDIA NIM** — Requires NVIDIA API key (free tier available)
+- **OpenRouter** — Requires OpenRouter API key
+- **Google Gemini** — Requires Gemini API key
+
+### Workspace Settings
+- **Memory**: Enable/disable learned context
+- **Indexing**: Auto-index on startup, manual reindex
+- **Context Limits**: Configure max files and relevance thresholds
+
+---
+
+## Safety & Security
+
+- **Command Approval**: Destructive commands (rm, git push) require approval
+- **Allowlist**: Auto-approve frequently used safe commands
+- **Secure Storage**: API keys stored in VS Code SecretStorage
+- **Live Writes**: Files written immediately with undo support via checkpoints
+- **No Data Leakage**: Code context never leaves your machine except to chosen AI provider
+
+---
+
+## Contributing
+
+We welcome contributors! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ### Areas to Contribute
-- **New AI Models**: Add support for new Puter models
-- **UI Improvements**: Better themes, layouts, accessibility
+- **New AI Providers**: Add support for additional AI services
+- **UI Improvements**: Themes, layouts, accessibility
 - **Language Support**: Better parsing for Python, Go, Rust, etc.
-- **Testing**: Add unit and integration tests
-- **Documentation**: Improve guides, add examples
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
+- **Testing**: Unit and integration tests
+- **Documentation**: Guides, examples, tutorials
 
 ---
 
-## 🛣️ Roadmap
+## Roadmap
 
-- [ ] **Git Integration**: Commit, branch, PR descriptions
-- [ ] **Test Generation**: Auto-generate unit tests
-- [ ] **Code Review**: Review PRs and suggest improvements
-- [ ] **Multi-file Edits**: Atomic changes across many files
-- [ ] **Custom Skills**: Teach Andor your codebase patterns
-- [ ] **Voice Input**: Speak your requests
-- [ ] **Offline Mode**: Local model support
+- [x] **Multi-provider Support** — NVIDIA, OpenRouter, Gemini
+- [x] **Live File Writes** — Auto-apply during streaming
+- [x] **Full Workspace Indexing** — 100+ file awareness
+- [x] **Advanced Settings Panel** — Memory, indexing, API keys
+- [x] **Terminal Integration** — Command execution with output
+- [x] **Checkpoints** — Conversation state management
+- [ ] **Git Integration** — Commit, branch, PR descriptions
+- [ ] **Test Generation** — Auto-generate unit tests
+- [ ] **Code Review** — Review PRs and suggest improvements
+- [ ] **Custom Skills** — Teach Andor your codebase patterns
+- [ ] **Voice Input** — Speak your requests
+- [ ] **Offline Mode** — Local model support
 
 ---
 
-## 📄 License
+## License
 
 [MIT](LICENSE) — Open source, free to use, modify, and distribute.
 
 ---
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
-- **[Puter](https://puter.com)** — For the AI infrastructure and API
-- **[VS Code](https://code.visualstudio.com/)** — For the excellent extension platform
-- **[Claude](https://anthropic.com/claude)**, **[OpenAI](https://openai.com)**, **[Google](https://deepmind.google/)**, **[DeepSeek](https://deepseek.com)**, **[Meta](https://ai.meta.com/)** — For the amazing AI models
+- **[Puter](https://puter.com)** — AI infrastructure and API
+- **[VS Code](https://code.visualstudio.com/)** — Extension platform
+- **[NVIDIA](https://nvidia.com)** — NIM API for high-performance models
+- **[OpenRouter](https://openrouter.ai)** — Unified AI model access
 - **Contributors** — Everyone who helps make Andor better
 
 ---
 
-## 💬 Community & Contact
+## Community & Support
 
 - **Issues**: [GitHub Issues](https://github.com/mutheejj/andor/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/mutheejj/andor/discussions)
-- **Discord**: [Join our server](https://discord.gg/andor) (coming soon)
 - **Email**: [johnmuthee547@gmail.com](mailto:johnmuthee547@gmail.com)
 - **X/Twitter**: [@mutheejohnke](https://x.com/mutheejohnke)
 - **GitHub**: [@mutheejj](https://github.com/mutheejj)
-- **Discord**: [@johnmuthee](https://discord.com/users/johnmuthee)
-- **Phone**: +254 768 498 013
 
 ---
 
-<p align="center">
-  <strong>Built with ❤️ by developers, for developers</strong>
-</p>
+Built with ❤️ by developers, for developers
 
-<p align="center">
-  <a href="https://github.com/mutheejj/andor">⭐ Star us on GitHub</a> •
-  <a href="https://x.com/mutheejohnke">🐦 Follow on X</a>
-</p>
