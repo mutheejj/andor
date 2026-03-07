@@ -2,7 +2,12 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { ChatPanel } from './components/ChatPanel';
 import { ModelSelector } from './components/ModelSelector';
 import type { ModelInfo } from './components/ModelSelector';
-import { SettingsPanel } from './components/SettingsPanel';
+import { AdvancedSettings } from './components/AdvancedSettings';
+import { IndexingStatusBar } from './components/IndexingStatusBar';
+import type { IndexingStatus } from './components/IndexingStatusBar';
+import { ModeSelector } from './components/ModeSelector';
+import type { ChatMode } from './components/ModeSelector';
+import type { FileSearchResult } from './components/MentionSearch';
 import { getAuthToken, setAuthToken, getUser, signOut } from './lib/puter';
 import type { CommandApprovalRequest } from './components/CommandApproval';
 
@@ -60,8 +65,17 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [allModels, setAllModels] = useState<ModelInfo[]>([]);
   const [pendingCommandApproval, setPendingCommandApproval] = useState<CommandApprovalRequest | null>(null);
+  const [indexingStatus, setIndexingStatus] = useState<IndexingStatus>({
+    state: 'idle', progress: 0, totalFiles: 0, indexedFiles: 0, message: 'Starting...'
+  });
+  const [fileSearchResults, setFileSearchResults] = useState<FileSearchResult[]>([]);
+  const [chatMode, setChatMode] = useState<ChatMode>('agent');
+  const [thinkingMode, setThinkingMode] = useState(false);
+  const [showMemory, setShowMemory] = useState(false);
+  const [projectMemory, setProjectMemory] = useState<unknown>(null);
   const pendingSystemPromptRef = useRef<string | null>(null);
   const streamingAssistantIdRef = useRef<string | null>(null);
+  const executedLiveBlocksRef = useRef<Set<string>>(new Set());
 
   // Load state from VS Code webview state on mount
   useEffect(() => {
@@ -114,9 +128,11 @@ export default function App() {
     }
   }, []);
 
-  // Fetch models from extension on mount
+  // Fetch models and indexing status from extension on mount
   useEffect(() => {
     postMessage({ type: 'getModels' });
+    postMessage({ type: 'getIndexingStatus' });
+    postMessage({ type: 'getMemory' });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -181,12 +197,24 @@ export default function App() {
           }
           break;
         case 'streamChunk': {
-          // Extension-host provider streaming
           const assistantId = streamingAssistantIdRef.current;
           if (assistantId && msg.text != null) {
             setMessages(prev =>
               prev.map(m => m.id === assistantId ? { ...m, content: msg.text, isStreaming: true } : m)
             );
+            // Live write completed write: blocks during stream
+            const writeRegex = /```write:([^\n]+)\n([\s\S]*?)```/g;
+            let wm: RegExpExecArray | null;
+            const text: string = msg.text;
+            while ((wm = writeRegex.exec(text)) !== null) {
+              const fp = wm[1].trim();
+              const content = wm[2];
+              const key = `write:${fp}:${content.length}`;
+              if (!executedLiveBlocksRef.current.has(key)) {
+                executedLiveBlocksRef.current.add(key);
+                vscode?.postMessage({ type: 'writeFile', filePath: fp, content });
+              }
+            }
           }
           break;
         }
@@ -198,6 +226,19 @@ export default function App() {
             );
             setIsLoading(false);
             streamingAssistantIdRef.current = null;
+            // Run terminal blocks on completion
+            const runRegex = /```run\n([\s\S]*?)```/g;
+            let rm: RegExpExecArray | null;
+            const doneText: string = msg.text;
+            while ((rm = runRegex.exec(doneText)) !== null) {
+              const command = rm[1].trim();
+              const key = `run:${command}`;
+              if (!executedLiveBlocksRef.current.has(key)) {
+                executedLiveBlocksRef.current.add(key);
+                vscode?.postMessage({ type: 'runTerminal', command });
+              }
+            }
+            executedLiveBlocksRef.current = new Set();
           }
           break;
         }
@@ -221,6 +262,21 @@ export default function App() {
           }
           break;
         }
+        case 'indexingStatus':
+          if (msg.indexingStatus) {
+            setIndexingStatus(msg.indexingStatus);
+          }
+          break;
+        case 'fileSearchResults':
+          if (msg.searchResults) {
+            setFileSearchResults(msg.searchResults);
+          }
+          break;
+        case 'memoryData':
+          if (msg.memory) {
+            setProjectMemory(msg.memory);
+          }
+          break;
         case 'error':
           setIsLoading(false);
           setMessages((prev: ChatMessage[]) => {
@@ -298,10 +354,15 @@ export default function App() {
     return model.providerId === 'puter';
   }, [allModels]);
 
-  if (showSettings) {
+  if (showSettings || showMemory) {
     return (
       <div className="flex flex-col h-screen overflow-hidden" style={{ background: 'var(--vscode-sideBar-background)', color: 'var(--vscode-sideBar-foreground)' }}>
-        <SettingsPanel postMessage={postMessage} onClose={() => { setShowSettings(false); postMessage({ type: 'getModels' }); }} />
+        <AdvancedSettings
+          postMessage={postMessage}
+          onClose={() => { setShowSettings(false); setShowMemory(false); postMessage({ type: 'getModels' }); }}
+          memory={projectMemory}
+          indexingStatus={indexingStatus}
+        />
       </div>
     );
   }
@@ -311,6 +372,9 @@ export default function App() {
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 flex-shrink-0" style={{ borderBottom: '1px solid var(--vscode-panel-border)', minHeight: '44px' }}>
         <div className="flex items-center gap-2">
+          <div className="w-6 h-6 rounded-md flex items-center justify-center text-[12px]" style={{ background: 'var(--vscode-button-background)', color: 'var(--vscode-button-foreground)' }}>
+            ⬡
+          </div>
           <span className="text-sm font-bold tracking-wide" style={{ color: 'var(--vscode-foreground)' }}>Andor</span>
           {authStatus.signedIn && authStatus.username && (
             <span className="text-[10px] px-1.5 py-0.5 rounded-full opacity-60" style={{ background: 'var(--vscode-badge-background)', color: 'var(--vscode-badge-foreground)' }}>
@@ -339,6 +403,14 @@ export default function App() {
             title="New Chat"
           >
             + New
+          </button>
+          <button
+            onClick={() => { setShowMemory(true); postMessage({ type: 'getMemory' }); }}
+            className="text-[10px] px-2 py-1 rounded transition-opacity hover:opacity-100 opacity-70"
+            style={{ background: 'var(--vscode-input-background)', color: 'var(--vscode-foreground)' }}
+            title="Memory & learned context"
+          >
+            🧠
           </button>
           <button
             onClick={() => setShowSettings(true)}
@@ -374,6 +446,15 @@ export default function App() {
       <div className="px-3 py-1.5 flex-shrink-0" style={{ borderBottom: '1px solid var(--vscode-panel-border)' }}>
         <ModelSelector selected={selectedModel} onChange={setSelectedModel} models={allModels} />
       </div>
+
+      {/* Mode selector: Chat vs Agent + Thinking toggle */}
+      <ModeSelector mode={chatMode} onChange={setChatMode} thinking={thinkingMode} onThinkingChange={setThinkingMode} />
+
+      {/* Indexing status bar */}
+      <IndexingStatusBar
+        status={indexingStatus}
+        onRefresh={() => postMessage({ type: 'getIndexingStatus' })}
+      />
 
       {/* Checkpoint panel */}
       {showCheckpoints && (
@@ -412,6 +493,8 @@ export default function App() {
           streamingAssistantIdRef={streamingAssistantIdRef}
           pendingCommandApproval={pendingCommandApproval}
           onDismissCommandApproval={() => setPendingCommandApproval(null)}
+          chatMode={chatMode}
+          thinkingMode={thinkingMode}
         />
       </div>
     </div>
