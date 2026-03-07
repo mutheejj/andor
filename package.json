@@ -1,8 +1,8 @@
 {
   "name": "andor",
   "displayName": "Andor",
-  "description": "Advanced AI coding assistant powered by Puter.js — no API keys needed",
-  "version": "0.1.1",
+  "description": "Advanced AI coding agent with multi-provider support, live file writes, terminal commands, and full workspace awareness",
+  "version": "0.2.0",
   "icon": "images/icon.jpeg",
   "galleryBanner": {
     "color": "#1e1e1e",
@@ -19,7 +19,27 @@
   "categories": [
     "Programming Languages",
     "Machine Learning",
-    "Other"
+    "Snippets",
+    "Debuggers",
+    "Testing"
+  ],
+  "keywords": [
+    "ai",
+    "assistant",
+    "agent",
+    "coding",
+    "chat",
+    "puter",
+    "claude",
+    "gpt",
+    "copilot",
+    "code generation",
+    "refactoring",
+    "terminal",
+    "nvidia",
+    "openrouter",
+    "gemini",
+    "multiprovider"
   ],
     "activationEvents": [
     "onStartupFinished"
@@ -56,6 +76,14 @@
       {
         "command": "andor.logout",
         "title": "Andor: Sign Out of Puter"
+      },
+      {
+        "command": "andor.toggleAutocomplete",
+        "title": "Andor: Toggle Autocomplete"
+      },
+      {
+        "command": "andor.setAutocompleteModel",
+        "title": "Andor: Set Autocomplete Model"
       }
     ]
   },
