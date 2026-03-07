@@ -5,7 +5,7 @@ const NVIDIA_MODELS: ProviderModel[] = [
   { id: 'qwen/qwen2.5-coder-32b-instruct', name: 'Qwen 2.5 Coder 32B', contextWindow: 131072, free: true, bestFor: 'Complex code generation', tier: 'powerful' },
   { id: 'deepseek-ai/deepseek-coder-v2', name: 'DeepSeek Coder V2', contextWindow: 131072, free: true, bestFor: 'Multi-language coding', tier: 'powerful' },
   { id: 'mistralai/codestral-22b-instruct-v0.1', name: 'Codestral 22B', contextWindow: 32768, free: true, bestFor: 'Code completion & FIM', tier: 'balanced' },
-  { id: 'devstral-2-123b-instruct-2512', name: 'Devstral 2 123B', contextWindow: 256000, free: true, bestFor: 'Advanced reasoning + coding', tier: 'powerful' },
+  { id: 'mistralai/devstral-small-2505', name: 'Devstral Small', contextWindow: 131072, free: true, bestFor: 'Advanced coding agent tasks', tier: 'powerful' },
 
   // === LLAMA FAMILY ===
   { id: 'meta/llama-3.3-70b-instruct', name: 'Llama 3.3 70B', contextWindow: 131072, free: true, bestFor: 'General coding & reasoning', tier: 'powerful' },
@@ -17,7 +17,7 @@ const NVIDIA_MODELS: ProviderModel[] = [
   // === REASONING MODELS ===
   { id: 'deepseek-ai/deepseek-r1', name: 'DeepSeek R1', contextWindow: 163840, free: true, bestFor: 'Complex multi-step reasoning', tier: 'powerful' },
   { id: 'deepseek-ai/deepseek-r1-distill-llama-70b', name: 'DeepSeek R1 Distill 70B', contextWindow: 131072, free: true, bestFor: 'Fast reasoning', tier: 'balanced' },
-  { id: 'kimi-k2-thinking', name: 'Kimi K2 Thinking', contextWindow: 256000, free: true, bestFor: 'Long-context reasoning + tools', tier: 'powerful' },
+  { id: 'moonshot-ai/kimi-k2-thinking', name: 'Kimi K2 Thinking', contextWindow: 256000, free: true, bestFor: 'Long-context reasoning + tools', tier: 'powerful' },
 
   // === NVIDIA NEMOTRON ===
   { id: 'nvidia/llama-3.1-nemotron-70b-instruct', name: 'Nemotron 70B', contextWindow: 131072, free: true, bestFor: 'Agentic tasks', tier: 'powerful' },
