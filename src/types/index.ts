@@ -52,7 +52,14 @@ export interface WebviewToExtensionMessage {
   type: 'sendMessage' | 'applyCode' | 'requestDiff' | 'clearHistory' | 'getContext' | 'openExternal' | 'startPuterAuth' | 'logout' | 'runTerminal' | 'writeFile' | 'readFile'
     | 'getProviders' | 'setApiKey' | 'deleteApiKey' | 'testProvider' | 'getModels' | 'selectModel'
     | 'approveCommand' | 'denyCommand' | 'alwaysAllowCommand'
-    | 'openSettings' | 'streamWithProvider';
+    | 'openSettings' | 'streamWithProvider'
+    | 'getIndexingStatus' | 'attachFiles' | 'attachFolder' | 'searchFiles' | 'getFileContent'
+    | 'getMemory' | 'clearMemory'
+    | 'listProjectFiles'
+    | 'webSearch' | 'fetchUrl'
+    | 'improvePrompt' | 'stopAgents'
+    | 'setServiceKey' | 'getServiceKeys' | 'deleteServiceKey'
+    | 'reindexWorkspace' | 'getIndexedFiles';
   text?: string;
   model?: string;
   images?: string[];
@@ -63,11 +70,15 @@ export interface WebviewToExtensionMessage {
   command?: string;
   content?: string;
   providerId?: string;
+  filePaths?: string[];
+  folderPath?: string;
+  query?: string;
   apiKey?: string;
   commandId?: string;
   pattern?: string;
   showPaid?: boolean;
   systemPrompt?: string;
+  chatMode?: string;
   history?: Array<{ role: string; content: string }>;
 }
 
@@ -96,11 +107,41 @@ export interface CommandApprovalRequest {
   description: string;
 }
 
+export interface IndexingStatusInfo {
+  state: 'idle' | 'indexing' | 'ready' | 'error';
+  progress: number;
+  totalFiles: number;
+  indexedFiles: number;
+  currentFile?: string;
+  message: string;
+}
+
+export interface AttachedFile {
+  name: string;
+  path: string;
+  content: string;
+  language: string;
+  size: number;
+}
+
+export interface FileSearchResult {
+  path: string;
+  relativePath: string;
+  name: string;
+  language: string;
+}
+
 export interface ExtensionToWebviewMessage {
   type: 'response' | 'responseChunk' | 'responseDone' | 'context' | 'diagnostics' | 'error' | 'diffResult' | 'historyCleared' | 'puterToken' | 'terminalResult' | 'fileWritten' | 'fileContent'
     | 'providers' | 'models' | 'providerTestResult' | 'apiKeyStored' | 'apiKeyDeleted'
     | 'commandApproval' | 'commandResult'
-    | 'streamChunk' | 'streamDone' | 'streamError';
+    | 'streamChunk' | 'streamDone' | 'streamError'
+    | 'taskSteps' | 'taskComplete'
+    | 'indexingStatus' | 'attachedFiles' | 'fileSearchResults'
+    | 'memoryData' | 'projectFiles'
+    | 'webSearchResults' | 'urlContent'
+    | 'agentDashboardUpdate' | 'improvedPrompt'
+  | 'serviceKeys' | 'indexedFiles';
   text?: string;
   files?: ContextFile[];
   diagnostics?: DiagnosticEntry[];
@@ -119,6 +160,11 @@ export interface ExtensionToWebviewMessage {
   commandId?: string;
   model?: string;
   provider?: string;
+  steps?: unknown[];
+  indexingStatus?: IndexingStatusInfo;
+  attachedFiles?: AttachedFile[];
+  searchResults?: FileSearchResult[];
+  memory?: unknown;
 }
 
 export interface ContextFile {
