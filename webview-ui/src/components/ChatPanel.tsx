@@ -5,6 +5,18 @@ import { ImageUploader } from './ImageUploader';
 import { CommandApproval } from './CommandApproval';
 import type { CommandApprovalRequest } from './CommandApproval';
 import { TerminalOutput } from './TerminalOutput';
+import { ThinkingBlock } from './ThinkingBlock';
+import { FileReview } from './FileReview';
+import type { ReviewedFile } from './FileReview';
+import { TerminalCommandBlock } from './TerminalCommandBlock';
+import { FilePicker } from './FilePicker';
+import type { FileEntry } from './FilePicker';
+import { WebSearchResults } from './WebSearchResults';
+import type { SearchResult } from './WebSearchResults';
+import { PromptImprover } from './PromptImprover';
+import { AgentDashboard } from './AgentDashboard';
+import type { AgentDashboardState } from './AgentDashboard';
+import type { ChatMode } from './ModeSelector';
 import { streamChat } from '../lib/puter';
 import type { ChatMessage, ContextFileInfo, PostMessageFn } from '../App';
 
@@ -22,6 +34,8 @@ interface ChatPanelProps {
   streamingAssistantIdRef: React.MutableRefObject<string | null>;
   pendingCommandApproval: CommandApprovalRequest | null;
   onDismissCommandApproval: () => void;
+  chatMode: ChatMode;
+  thinkingMode: boolean;
 }
 
 interface DiffState {
@@ -132,6 +146,136 @@ function renderMarkdownText(text: string): React.ReactNode[] {
   return elements;
 }
 
+/**
+ * Renders assistant message content with support for:
+ * - <thinking>...</thinking> blocks → ThinkingBlock component
+ * - ```terminal:command blocks → TerminalCommandBlock component  
+ * - ```write:filepath blocks → FileReview entries + CodeBlock
+ * - Regular code blocks → CodeBlock
+ * - Markdown text → renderMarkdownText
+ */
+function renderAssistantContent(
+  content: string,
+  isStreaming: boolean,
+  handleApplyCode: (code: string, filePath: string, language: string) => void,
+  handleRequestDiff: (code: string, filePath: string, language: string) => void,
+  postMessage: (msg: unknown) => void,
+): React.ReactNode[] {
+  const elements: React.ReactNode[] = [];
+  let remaining = content;
+  let key = 0;
+
+  // Extract <thinking> blocks
+  while (remaining.includes('<thinking>')) {
+    const startIdx = remaining.indexOf('<thinking>');
+    const endIdx = remaining.indexOf('</thinking>');
+
+    // Render text before thinking block
+    if (startIdx > 0) {
+      const before = remaining.slice(0, startIdx).trim();
+      if (before) {
+        elements.push(...renderParsedBlocks(before, key, handleApplyCode, handleRequestDiff));
+        key += 100;
+      }
+    }
+
+    if (endIdx > startIdx) {
+      const thinkingContent = remaining.slice(startIdx + 10, endIdx).trim();
+      elements.push(
+        <ThinkingBlock key={`think-${key++}`} content={thinkingContent} isActive={false} />
+      );
+      remaining = remaining.slice(endIdx + 12);
+    } else {
+      // Still streaming the thinking block
+      const thinkingContent = remaining.slice(startIdx + 10).trim();
+      elements.push(
+        <ThinkingBlock key={`think-${key++}`} content={thinkingContent} isActive={isStreaming} />
+      );
+      remaining = '';
+    }
+  }
+
+  // Render remaining content
+  if (remaining.trim()) {
+    elements.push(...renderParsedBlocks(remaining, key, handleApplyCode, handleRequestDiff));
+  }
+
+  return elements;
+}
+
+function renderParsedBlocks(
+  content: string,
+  startKey: number,
+  handleApplyCode: (code: string, filePath: string, language: string) => void,
+  handleRequestDiff: (code: string, filePath: string, language: string) => void,
+): React.ReactNode[] {
+  const blocks = parseMessageContent(content);
+  let key = startKey;
+  const fileActions: Array<{ path: string; relativePath: string; language: string; action: 'read' | 'edit' | 'create' }> = [];
+
+  const elements = blocks.map((block) => {
+    key++;
+    if (block.type === 'code') {
+      // Detect terminal blocks
+      if (block.language === 'terminal' || block.filePath === 'command') {
+        const lines = block.content.split('\n');
+        const command = lines[0]?.replace(/^\$\s*/, '') || '';
+        const output = lines.slice(1).join('\n');
+        return (
+          <TerminalCommandBlock
+            key={`term-${key}`}
+            command={command}
+            output={output}
+            status="done"
+            exitCode={0}
+          />
+        );
+      }
+
+      // Detect write blocks — track for file review
+      if (block.filePath) {
+        const ext = block.filePath.split('.').pop() || '';
+        const langMap: Record<string, string> = {
+          ts: 'typescript', tsx: 'typescriptreact', js: 'javascript', jsx: 'javascriptreact',
+          py: 'python', go: 'go', rs: 'rust', html: 'html', css: 'css', json: 'json',
+          md: 'markdown', yaml: 'yaml', yml: 'yaml',
+        };
+        fileActions.push({
+          path: block.filePath,
+          relativePath: block.filePath,
+          language: langMap[ext] || 'plaintext',
+          action: 'edit',
+        });
+      }
+
+      return (
+        <CodeBlock
+          key={`code-${key}`}
+          code={block.content}
+          language={block.language || 'plaintext'}
+          filePath={block.filePath}
+          onApply={block.filePath ? handleApplyCode : undefined}
+          onRequestDiff={block.filePath ? handleRequestDiff : undefined}
+        />
+      );
+    }
+    return <div key={`text-${key}`}>{renderMarkdownText(block.content)}</div>;
+  });
+
+  // Add file review summary if there were file actions
+  if (fileActions.length > 0) {
+    elements.unshift(
+      <FileReview
+        key={`review-${startKey}`}
+        files={fileActions}
+        title={`${fileActions.length} file${fileActions.length !== 1 ? 's' : ''} changed`}
+      />
+    );
+  }
+
+  return elements;
+}
+
 const TASK_COMPLETE_SIGNALS = [
   /task (is )?complete/i,
   /all (done|finished|changes made)/i,
@@ -160,6 +304,8 @@ export function ChatPanel({
   streamingAssistantIdRef,
   pendingCommandApproval,
   onDismissCommandApproval,
+  chatMode,
+  thinkingMode,
 }: ChatPanelProps) {
   const [inputText, setInputText] = useState('');
   const [uploadedImages, setUploadedImages] = useState<string[]>([]);
@@ -167,6 +313,14 @@ export function ChatPanel({
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editingContent, setEditingContent] = useState('');
   const [taskComplete, setTaskComplete] = useState(false);
+  const [showFilePicker, setShowFilePicker] = useState(false);
+  const [filePickerQuery, setFilePickerQuery] = useState('');
+  const [filePickerMode, setFilePickerMode] = useState<'slash' | 'button'>('slash');
+  const [projectFiles, setProjectFiles] = useState<FileEntry[]>([]);
+  const [attachedFiles, setAttachedFiles] = useState<FileEntry[]>([]);
+  const [webSearchResults, setWebSearchResults] = useState<SearchResult[]>([]);
+  const [webSearchQuery, setWebSearchQuery] = useState('');
+  const [agentDashboard, setAgentDashboard] = useState<AgentDashboardState | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const editTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -184,6 +338,12 @@ export function ChatPanel({
   useEffect(() => {
     scrollToBottom();
   }, [messages, scrollToBottom]);
+
+  // Request project files on mount
+  useEffect(() => {
+    postMessage({ type: 'listProjectFiles' });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     const handleExtMessage = (event: MessageEvent) => {
@@ -207,6 +367,13 @@ export function ChatPanel({
           code: msg.diff.newContent,
           language: '',
         });
+      } else if (msg.type === 'projectFiles' && msg.files) {
+        setProjectFiles(msg.files as FileEntry[]);
+      } else if (msg.type === 'webSearchResults') {
+        setWebSearchResults(msg.results || []);
+        setWebSearchQuery(msg.query || '');
+      } else if (msg.type === 'agentDashboardUpdate') {
+        setAgentDashboard(msg.state || null);
       }
     };
 
@@ -214,20 +381,43 @@ export function ChatPanel({
     return () => window.removeEventListener('message', handleExtMessage);
   }, [selectedModel]);
 
-  const autoExecuteBlocks = useCallback((fullText: string) => {
+  // Track which blocks we've already auto-executed in the current response
+  const executedBlocksRef = useRef<Set<string>>(new Set());
+
+  // Called on every streaming chunk — writes files the moment blocks are complete
+  const autoExecuteLive = useCallback((fullText: string) => {
+    // Write blocks: ```write:path\ncontent```
     const writeRegex = /```write:([^\n]+)\n([\s\S]*?)```/g;
     let m: RegExpExecArray | null;
     while ((m = writeRegex.exec(fullText)) !== null) {
       const filePath = m[1].trim();
       const content = m[2];
-      postMessage({ type: 'writeFile', filePath, content });
+      const key = `write:${filePath}:${content.length}`;
+      if (!executedBlocksRef.current.has(key)) {
+        executedBlocksRef.current.add(key);
+        postMessage({ type: 'writeFile', filePath, content });
+      }
     }
+    // Run blocks: ```run\ncommand```  — only run after streaming done (safety)
+  }, [postMessage]);
+
+  const autoExecuteBlocks = useCallback((fullText: string) => {
+    // Run terminal blocks on completion
     const runRegex = /```run\n([\s\S]*?)```/g;
+    let m: RegExpExecArray | null;
     while ((m = runRegex.exec(fullText)) !== null) {
       const command = m[1].trim();
-      postMessage({ type: 'runTerminal', command });
+      const key = `run:${command}`;
+      if (!executedBlocksRef.current.has(key)) {
+        executedBlocksRef.current.add(key);
+        postMessage({ type: 'runTerminal', command });
+      }
     }
-  }, [postMessage]);
+    // Also handle any write blocks not yet written (in case stream ended without triggering live write)
+    autoExecuteLive(fullText);
+    // Reset tracker for next response
+    executedBlocksRef.current = new Set();
+  }, [postMessage, autoExecuteLive]);
 
   const doStreamChat = async (
     systemPrompt: string,
@@ -287,6 +477,8 @@ export function ChatPanel({
         setMessages(prev =>
           prev.map(m => m.id === assistantId ? { ...m, content: fullText, isStreaming: true } : m)
         );
+        // Live write: apply completed write: blocks immediately during stream
+        autoExecuteLive(fullText);
       },
       (fullText) => {
         setMessages(prev =>
@@ -307,6 +499,20 @@ export function ChatPanel({
     );
   };
 
+  // Build thinking mode prefix for system prompt
+  const getThinkingPrefix = useCallback(() => {
+    if (!thinkingMode) return '';
+    return `\n\n[THINKING MODE ENABLED]\nBefore making any changes, you MUST first output a <thinking> block explaining:\n1. What you understand about the request\n2. What files need to change and why\n3. What approach you'll take\n4. Potential risks or side effects\n5. Your verification plan\nFormat: <thinking>\n...your analysis...\n</thinking>\nThen proceed with your response.\n`;
+  }, [thinkingMode]);
+
+  // Build mode prefix for system prompt
+  const getModePrefix = useCallback(() => {
+    if (chatMode === 'chat') {
+      return '\n\n[CHAT MODE] You are in chat-only mode. Do NOT write files, run commands, or make any edits. Only answer questions, explain code, discuss approaches, and provide guidance. If the user asks you to make changes, explain what you would do but do not output write: or run blocks.\n';
+    }
+    return '\n\n[AGENT MODE] You are in agent mode. You can read files, write files, run terminal commands, and make edits to the codebase. Use ```write:filepath and ```run blocks to take actions.\n';
+  }, [chatMode]);
+
   const sendMessage = useCallback((text: string, images: string[]) => {
     onCreateCheckpoint(messagesRef.current, text.slice(0, 60));
 
@@ -323,12 +529,13 @@ export function ChatPanel({
     setIsLoading(true);
     setTaskComplete(false);
 
+    // Append mode and thinking prefixes to the message
+    const modeContext = getModePrefix() + getThinkingPrefix();
+
     if (isPuterModel(selectedModel)) {
-      // Puter models: use the existing webview-side flow
       pendingChatRef.current = { userText: text, images };
-      postMessage({ type: 'sendMessage', text, model: selectedModel, images });
+      postMessage({ type: 'sendMessage', text, model: selectedModel, images, systemPrompt: modeContext || undefined });
     } else {
-      // Non-Puter models: create assistant placeholder and stream from extension host
       const assistantId = crypto.randomUUID();
       streamingAssistantIdRef.current = assistantId;
       setMessages(prev => [
@@ -343,29 +550,36 @@ export function ChatPanel({
         },
       ]);
 
-      // Build history from recent messages
       const recentMessages = messagesRef.current.slice(-6);
       const history = recentMessages
         .filter(m => !m.isStreaming)
         .map(m => ({ role: m.role, content: m.content }));
 
-      // Request context assembly from extension, then stream
       postMessage({
         type: 'streamWithProvider',
         text,
         model: selectedModel,
         images,
         history,
+        systemPrompt: modeContext || undefined,
       });
     }
-  }, [contextFiles, selectedModel, postMessage, setMessages, setIsLoading, onCreateCheckpoint, isPuterModel, streamingAssistantIdRef]);
+  }, [contextFiles, selectedModel, postMessage, setMessages, setIsLoading, onCreateCheckpoint, isPuterModel, streamingAssistantIdRef, getModePrefix, getThinkingPrefix]);
 
   const handleSend = () => {
-    const text = inputText.trim();
+    let text = inputText.trim();
     if (!text || isLoading) return;
+
+    // Prepend attached file paths as context
+    if (attachedFiles.length > 0) {
+      const fileList = attachedFiles.map(f => f.relativePath).join(', ');
+      text = `[Attached files: ${fileList}]\n\n${text}`;
+    }
+
     const imgs = [...uploadedImages];
     setInputText('');
     setUploadedImages([]);
+    setAttachedFiles([]);
     sendMessage(text, imgs);
   };
 
@@ -374,7 +588,75 @@ export function ChatPanel({
     sendMessage('Continue with the next steps. If everything is complete, summarize what was done.', []);
   };
 
+  // Handle input changes — detect / trigger for file picker
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const value = e.target.value;
+    setInputText(value);
+
+    // Detect / at start of line or after space
+    const cursorPos = e.target.selectionStart || 0;
+    const textBeforeCursor = value.slice(0, cursorPos);
+    const lastSlashIdx = textBeforeCursor.lastIndexOf('/');
+
+    if (lastSlashIdx >= 0) {
+      const charBeforeSlash = lastSlashIdx > 0 ? textBeforeCursor[lastSlashIdx - 1] : ' ';
+      if (charBeforeSlash === ' ' || charBeforeSlash === '\n' || lastSlashIdx === 0) {
+        const query = textBeforeCursor.slice(lastSlashIdx + 1);
+        // Only show picker if query doesn't contain spaces (still typing a path)
+        if (!query.includes(' ')) {
+          setFilePickerQuery(query);
+          setFilePickerMode('slash');
+          setShowFilePicker(true);
+          return;
+        }
+      }
+    }
+
+    if (showFilePicker && filePickerMode === 'slash') {
+      setShowFilePicker(false);
+    }
+  };
+
+  // Handle file selection from picker
+  const handleFileSelect = useCallback((file: FileEntry) => {
+    if (filePickerMode === 'slash') {
+      // Replace the /query with the file path in the input
+      const cursorPos = textareaRef.current?.selectionStart || inputText.length;
+      const textBeforeCursor = inputText.slice(0, cursorPos);
+      const lastSlashIdx = textBeforeCursor.lastIndexOf('/');
+      if (lastSlashIdx >= 0) {
+        const before = inputText.slice(0, lastSlashIdx);
+        const after = inputText.slice(cursorPos);
+        setInputText(before + file.relativePath + ' ' + after);
+      }
+    }
+
+    // Add to attached files if not already there
+    if (!attachedFiles.find(f => f.path === file.path)) {
+      setAttachedFiles(prev => [...prev, file]);
+      // Request the file content to be included as context
+      postMessage({ type: 'attachFiles', filePaths: [file.path] });
+    }
+
+    setShowFilePicker(false);
+    setFilePickerQuery('');
+    textareaRef.current?.focus();
+  }, [filePickerMode, inputText, attachedFiles, postMessage]);
+
+  const handleRemoveAttachedFile = (filePath: string) => {
+    setAttachedFiles(prev => prev.filter(f => f.path !== filePath));
+  };
+
+  const handleWebSearch = useCallback(() => {
+    const text = inputText.trim();
+    if (!text) return;
+    postMessage({ type: 'webSearch', text });
+  }, [inputText, postMessage]);
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Don't handle Enter/etc when file picker is open (it handles them)
+    if (showFilePicker) return;
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
@@ -471,6 +753,14 @@ export function ChatPanel({
               </div>
             )}
 
+            {/* Agent Dashboard */}
+            {agentDashboard && agentDashboard.agents.length > 0 && (
+              <AgentDashboard
+                state={agentDashboard}
+                onStop={() => postMessage({ type: 'stopAgents' })}
+              />
+            )}
+
             {messages.map((msg, idx) => (
               <div key={msg.id} className={`group relative ${msg.role === 'user' ? 'flex justify-end' : ''}`}>
                 {msg.role === 'user' ? (
@@ -542,8 +832,10 @@ export function ChatPanel({
                   /* Assistant message */
                   <div className="max-w-full w-full">
                     <div className="flex items-center gap-1.5 mb-1">
+                      <div className="w-4 h-4 rounded flex items-center justify-center text-[8px]" style={{ background: 'var(--vscode-button-background)', color: 'var(--vscode-button-foreground)' }}>⬡</div>
                       <span className="text-[9px] font-semibold opacity-50">Andor</span>
                       {msg.model && <span className="text-[9px] opacity-30">· {msg.model}</span>}
+                      {chatMode === 'agent' && <span className="text-[8px] opacity-20">agent</span>}
                       {msg.isStreaming && (
                         <span className="inline-block w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: 'var(--vscode-button-background)' }} />
                       )}
@@ -555,25 +847,11 @@ export function ChatPanel({
                           <p className="text-xs">{(msg.content ?? '').slice(7)}</p>
                         </div>
                       ) : msg.content ? (
-                        parseMessageContent(msg.content).map((block, i) => {
-                          if (block.type === 'code') {
-                            return (
-                              <CodeBlock
-                                key={i}
-                                code={block.content}
-                                language={block.language || 'plaintext'}
-                                filePath={block.filePath}
-                                onApply={block.filePath ? handleApplyCode : undefined}
-                                onRequestDiff={block.filePath ? handleRequestDiff : undefined}
-                              />
-                            );
-                          }
-                          return <div key={i}>{renderMarkdownText(block.content)}</div>;
-                        })
+                        renderAssistantContent(msg.content, msg.isStreaming || false, handleApplyCode, handleRequestDiff, postMessage)
                       ) : msg.isStreaming ? (
                         <div className="flex items-center gap-2 opacity-40">
                           <div className="w-3 h-3 border border-current border-t-transparent rounded-full animate-spin" />
-                          <span className="text-xs">Thinking...</span>
+                          <span className="text-xs">{thinkingMode ? 'Thinking deeply...' : 'Working...'}</span>
                         </div>
                       ) : null}
                     </div>
@@ -636,15 +914,104 @@ export function ChatPanel({
           )}
 
           {/* Input area */}
-          <div className="flex-shrink-0 px-3 py-2" style={{ borderTop: '1px solid var(--vscode-panel-border)' }}>
+          <div className="flex-shrink-0 px-3 py-2 relative" style={{ borderTop: '1px solid var(--vscode-panel-border)' }}>
+            {/* Attached files display */}
+            {attachedFiles.length > 0 && (
+              <div className="flex items-center gap-1 flex-wrap mb-1.5 pb-1.5" style={{ borderBottom: '1px solid var(--vscode-panel-border)' }}>
+                <span className="text-[9px] opacity-40">Attached:</span>
+                {attachedFiles.map((f) => (
+                  <span
+                    key={f.path}
+                    className="inline-flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded"
+                    style={{ background: 'var(--vscode-badge-background)', color: 'var(--vscode-badge-foreground)' }}
+                  >
+                    {f.isDirectory ? '📁' : '📄'} {f.name}
+                    <button
+                      onClick={() => handleRemoveAttachedFile(f.path)}
+                      className="opacity-60 hover:opacity-100 ml-0.5"
+                      title="Remove"
+                    >×</button>
+                  </span>
+                ))}
+              </div>
+            )}
+
             <ImageUploader images={uploadedImages} onImagesChange={setUploadedImages} />
+
+            {/* File picker popup */}
+            {showFilePicker && (
+              <div className="absolute bottom-full left-0 right-0 px-3 pb-1 z-50">
+                <FilePicker
+                  query={filePickerQuery}
+                  files={projectFiles}
+                  visible={showFilePicker}
+                  onSelect={handleFileSelect}
+                  onDismiss={() => { setShowFilePicker(false); setFilePickerQuery(''); textareaRef.current?.focus(); }}
+                  mode={filePickerMode}
+                />
+              </div>
+            )}
+
+            {/* Web search results display */}
+            {webSearchResults.length > 0 && (
+              <div className="mb-1.5">
+                <WebSearchResults
+                  results={webSearchResults}
+                  query={webSearchQuery}
+                  onFetchUrl={(url) => postMessage({ type: 'fetchUrl', url })}
+                />
+              </div>
+            )}
+
             <div className="flex gap-1.5 mt-1 items-end">
+              {/* Add files button */}
+              <button
+                onClick={() => {
+                  setFilePickerMode('button');
+                  setFilePickerQuery('');
+                  setShowFilePicker(v => !v);
+                  if (!projectFiles.length) {
+                    postMessage({ type: 'listProjectFiles' });
+                  }
+                }}
+                className="px-2 py-2 rounded text-sm transition-opacity hover:opacity-100 opacity-60 flex-shrink-0"
+                style={{
+                  backgroundColor: 'var(--vscode-input-background)',
+                  color: 'var(--vscode-foreground)',
+                  border: '1px solid var(--vscode-input-border, var(--vscode-panel-border))',
+                }}
+                title="Add files or folders (or type / in chat)"
+              >
+                📎
+              </button>
+              {/* Web search button */}
+              <button
+                onClick={handleWebSearch}
+                disabled={!inputText.trim()}
+                className="px-2 py-2 rounded text-sm transition-opacity hover:opacity-100 opacity-60 disabled:opacity-20 flex-shrink-0"
+                style={{
+                  backgroundColor: 'var(--vscode-input-background)',
+                  color: 'var(--vscode-foreground)',
+                  border: '1px solid var(--vscode-input-border, var(--vscode-panel-border))',
+                }}
+                title="Search the web for current input text"
+              >
+                🔍
+              </button>
+              {/* Prompt improver button */}
+              <PromptImprover
+                inputText={inputText}
+                onImproved={(text) => setInputText(text)}
+                postMessage={postMessage}
+                selectedModel={selectedModel}
+                disabled={isLoading}
+              />
               <textarea
                 ref={textareaRef}
                 value={inputText}
-                onChange={(e) => setInputText(e.target.value)}
+                onChange={handleInputChange}
                 onKeyDown={handleKeyDown}
-                placeholder={isLoading ? 'Andor is working...' : 'Ask Andor anything about your code...'}
+                placeholder={isLoading ? 'Andor is working...' : 'Ask anything... (type / to add files)'}
                 rows={1}
                 className="flex-1 resize-none rounded px-2.5 py-2 text-sm outline-none"
                 style={{
@@ -671,7 +1038,7 @@ export function ChatPanel({
                 ) : '↑'}
               </button>
             </div>
-            <div className="text-[9px] opacity-30 mt-1 px-0.5">Enter to send · Shift+Enter for newline</div>
+            <div className="text-[9px] opacity-30 mt-1 px-0.5">Enter to send · Shift+Enter for newline · / to add files</div>
           </div>
 
           <style>{`
