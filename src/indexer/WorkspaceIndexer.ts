@@ -272,6 +272,23 @@ export class WorkspaceIndexer {
     }
   }
 
+  getAllFiles(): Array<{ path: string; relativePath: string; language: string; size: number }> {
+    const results: Array<{ path: string; relativePath: string; language: string; size: number }> = [];
+    for (const [, fileInfo] of this.index.files) {
+      results.push({
+        path: fileInfo.path,
+        relativePath: fileInfo.relativePath,
+        language: fileInfo.language,
+        size: fileInfo.size,
+      });
+    }
+    return results;
+  }
+
+  indexWorkspace(): void {
+    this.initialize().catch(err => console.error('[Andor] Re-index failed:', err));
+  }
+
   async refreshFile(filePath: string): Promise<void> {
     if (this.shouldIndex(filePath)) {
       await this.indexFile(filePath);
