@@ -5,11 +5,36 @@ import * as cp from 'child_process';
 import { WebviewToExtensionMessage, ExtensionToWebviewMessage, DiffResult, AllowlistFile, ProviderInfo, ModelInfo } from '../types';
 
 import { WorkspaceIndexer } from '../indexer/WorkspaceIndexer';
-import { ContextAssembler } from '../indexer/ContextAssembler';
+import { ContextAssembler as OldContextAssembler } from '../indexer/ContextAssembler';
 import { DiagnosticsWatcher } from '../indexer/DiagnosticsWatcher';
+import { AndorCore } from '../core/AndorCore';
 import { PuterAuthServer } from '../auth/PuterAuthServer';
 import { ProviderRegistry, isPuterModel } from '../providers';
 import { AIMessage } from '../providers/base';
+import { LearningService } from '../learning';
+import { WebSearchService } from '../services/WebSearchService';
+import { AgentOrchestrator } from '../agents/AgentOrchestrator';
+import { SessionContinuity } from '../agents/SessionContinuity';
+import { TerminalParser } from '../terminal/TerminalParser';
+import { ImportGraphBuilder } from '../context/ImportGraphBuilder';
+import { FileRelevanceScorer } from '../context/FileRelevanceScorer';
+import { CloudDetector } from '../context/CloudDetector';
+
+/** Core behavior instructions appended to every system prompt */
+const ANDOR_BEHAVIOR_PROMPT = `
+
+[ANDOR CORE BEHAVIOR]
+1. HONESTY: Never claim you did something you didn't. If you haven't run a command, don't say "Done" or "Deleted". If unsure, say so and explain what you'd need to verify.
+2. CONCISE RESPONSES: Keep explanations short and to the point, like an expert explaining to a junior developer. Focus on WHAT to do and WHY, not lengthy theory.
+3. FILE CONTENT: When asked about a file's content, give a brief summary (purpose, key functions, structure) — never dump the entire file content into the chat unless specifically asked for the full code.
+4. ACTION FOCUS: Your primary job is writing and updating files, running commands, and making changes. Minimize talk, maximize action.
+5. VERIFICATION: After making changes, verify they work. If you write a file, confirm it was written. If you run a command, report the actual output. Never fabricate results.
+6. THINKING: When facing complex tasks, think step-by-step before acting. Show your reasoning in <thinking> blocks when the task is non-trivial.
+7. FRAMEWORK AWARENESS: Understand and respect the project's framework conventions (React, Express, Django, Next.js, etc). Follow the project's existing patterns.
+8. ERROR HANDLING: When errors occur, analyze the root cause deeply before suggesting fixes. Don't guess — read the error, understand it, then fix it.
+9. TERMINAL COMMANDS: You CAN run terminal commands. When the user asks to run a command, delete files, install packages, or do anything that requires the terminal, use the runTerminal message type. Examples: npm install, rm -rf, git push, ls, cat, etc.
+10. COMMAND APPROVAL: Some commands need user approval (like rm, git push). The system will prompt the user. Don't ask the user if they want to run it — just send the command and the system will handle approval.
+`;
 
 const AUTO_ALLOWED = [
   /^git (status|diff|log|branch|show)/,
@@ -51,21 +76,28 @@ function extractPattern(command: string): string {
 export class WebviewBridge {
   private webviewView: vscode.WebviewView | undefined;
   private indexer: WorkspaceIndexer;
-  private contextAssembler: ContextAssembler;
+  private contextAssembler: OldContextAssembler;
   private diagnosticsWatcher: DiagnosticsWatcher;
   private context: vscode.ExtensionContext;
   private authServer: PuterAuthServer;
   private providerRegistry: ProviderRegistry;
+  private learningService?: LearningService;
+  private orchestrator?: AgentOrchestrator;
+  private sessionContinuity?: SessionContinuity;
+  private importGraph?: ImportGraphBuilder;
+  private relevanceScorer?: FileRelevanceScorer;
   private puterToken: string | null = null;
   private pendingCommands: Map<string, { command: string; resolve: (approved: boolean) => void }> = new Map();
+  private andorCore?: AndorCore;
 
   constructor(
     indexer: WorkspaceIndexer,
-    contextAssembler: ContextAssembler,
+    contextAssembler: OldContextAssembler,
     diagnosticsWatcher: DiagnosticsWatcher,
     context: vscode.ExtensionContext,
     authServer: PuterAuthServer,
     providerRegistry: ProviderRegistry,
+    learningService?: LearningService,
   ) {
     this.indexer = indexer;
     this.contextAssembler = contextAssembler;
@@ -73,10 +105,44 @@ export class WebviewBridge {
     this.context = context;
     this.authServer = authServer;
     this.providerRegistry = providerRegistry;
+    this.learningService = learningService;
+
+    // Initialize import graph and relevance scorer
+    this.importGraph = new ImportGraphBuilder(indexer);
+    this.importGraph.build();
+    this.relevanceScorer = new FileRelevanceScorer(indexer, this.importGraph);
+
+    // Initialize agent orchestrator and session continuity
+    this.orchestrator = new AgentOrchestrator(providerRegistry);
+    this.orchestrator.setDashboardCallback((state) => {
+      this.webviewView?.webview.postMessage({ type: 'agentDashboardUpdate', state });
+    });
+    this.sessionContinuity = new SessionContinuity(providerRegistry);
 
     this.diagnosticsWatcher.onChange((diagnostics) => {
       this.postMessage({ type: 'diagnostics', diagnostics });
     });
+
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (workspaceRoot) {
+      const globalStoragePath = context.globalStorageUri.fsPath;
+      this.andorCore = new AndorCore(workspaceRoot, globalStoragePath);
+      this.andorCore.setOnStepUpdateCallback((steps) => {
+        this.postMessage({ type: 'taskSteps', steps });
+      });
+      this.andorCore.setOnTaskCompleteCallback((success) => {
+        this.postMessage({ type: 'taskComplete', success });
+      });
+      this.andorCore.setOnIndexingStatusCallback((status) => {
+        this.postMessage({ type: 'indexingStatus', indexingStatus: status });
+      });
+      this.andorCore.initialize().catch(err => {
+        console.error('[Andor] Core initialization failed:', err);
+      });
+    }
+
+    // Load and apply stored service keys (Brave, Vision, etc.)
+    this.loadAndApplyServiceKeys().catch(() => { /* ignore */ });
   }
 
   setWebviewView(webviewView: vscode.WebviewView): void {
@@ -190,8 +256,444 @@ export class WebviewBridge {
         console.log('[Andor] Handling streamWithProvider');
         await this.handleStreamWithProvider(message);
         break;
+      case 'getIndexingStatus':
+        this.handleGetIndexingStatus();
+        break;
+      case 'attachFiles':
+        await this.handleAttachFiles(message);
+        break;
+      case 'attachFolder':
+        await this.handleAttachFolder(message);
+        break;
+      case 'searchFiles':
+        await this.handleSearchFiles(message);
+        break;
+      case 'getFileContent':
+        await this.handleGetFileContent(message);
+        break;
+      case 'getMemory':
+        await this.handleGetMemory();
+        break;
+      case 'clearMemory':
+        await this.handleClearMemory();
+        break;
+      case 'listProjectFiles':
+        this.handleListProjectFiles();
+        break;
+      case 'webSearch':
+        await this.handleWebSearch(message);
+        break;
+      case 'fetchUrl':
+        await this.handleFetchUrl(message);
+        break;
+      case 'improvePrompt':
+        await this.handleImprovePrompt(message);
+        break;
+      case 'stopAgents':
+        this.handleStopAgents();
+        break;
+      case 'setServiceKey':
+        await this.handleSetServiceKey(message);
+        break;
+      case 'getServiceKeys':
+        await this.handleGetServiceKeys();
+        break;
+      case 'deleteServiceKey':
+        await this.handleDeleteServiceKey(message);
+        break;
+      case 'reindexWorkspace':
+        await this.handleReindexWorkspace();
+        break;
+      case 'getIndexedFiles':
+        await this.handleGetIndexedFiles();
+        break;
       default:
         console.log('[Andor] Unknown message type:', message.type);
+    }
+  }
+
+  private handleGetIndexingStatus(): void {
+    if (this.andorCore) {
+      this.postMessage({ type: 'indexingStatus', indexingStatus: this.andorCore.getIndexingStatus() });
+    }
+  }
+
+  private async handleAttachFiles(message: WebviewToExtensionMessage): Promise<void> {
+    const filePaths = message.filePaths || [];
+    const workspaceRoot = this.indexer.getWorkspaceRoot() || '';
+    const attachedFiles: Array<{ name: string; path: string; content: string; language: string; size: number }> = [];
+
+    for (const fp of filePaths) {
+      try {
+        const fullPath = path.isAbsolute(fp) ? fp : path.join(workspaceRoot, fp);
+        
+        // Skip directories - only attach files
+        const stat = fs.statSync(fullPath);
+        if (stat.isDirectory()) {
+          console.log(`[Andor] Skipping directory in attachFiles: ${fp}`);
+          continue;
+        }
+        
+        const uri = vscode.Uri.file(fullPath);
+        const bytes = await vscode.workspace.fs.readFile(uri);
+        const content = Buffer.from(bytes).toString('utf-8');
+        const ext = path.extname(fullPath).replace('.', '');
+        attachedFiles.push({
+          name: path.basename(fullPath),
+          path: fullPath,
+          content: content.length > 100000 ? content.substring(0, 100000) + '\n... (truncated)' : content,
+          language: ext || 'plaintext',
+          size: bytes.byteLength,
+        });
+      } catch (err) {
+        console.error(`[Andor] Failed to read file ${fp}:`, err);
+      }
+    }
+
+    this.postMessage({ type: 'attachedFiles', attachedFiles });
+  }
+
+  private async handleAttachFolder(message: WebviewToExtensionMessage): Promise<void> {
+    const folderPath = message.folderPath;
+    if (!folderPath) return;
+
+    const workspaceRoot = this.indexer.getWorkspaceRoot() || '';
+    const fullPath = path.isAbsolute(folderPath) ? folderPath : path.join(workspaceRoot, folderPath);
+
+    try {
+      const entries = fs.readdirSync(fullPath, { withFileTypes: true });
+      const filePaths = entries
+        .filter(e => e.isFile())
+        .slice(0, 50)
+        .map(e => path.join(fullPath, e.name));
+      
+      await this.handleAttachFiles({ ...message, type: 'attachFiles', filePaths });
+    } catch (err) {
+      console.error(`[Andor] Failed to read folder ${folderPath}:`, err);
+    }
+  }
+
+  private async handleSearchFiles(message: WebviewToExtensionMessage): Promise<void> {
+    const query = (message.query || '').toLowerCase();
+    if (!query) return;
+
+    const workspaceRoot = this.indexer.getWorkspaceRoot() || '';
+    const allFiles = this.indexer.getAllFiles?.() || [];
+    
+    const results = allFiles
+      .filter((f: { relativePath: string }) => f.relativePath.toLowerCase().includes(query))
+      .slice(0, 50)
+      .map((f: { path: string; relativePath: string; language: string }) => ({
+        path: f.path,
+        relativePath: f.relativePath,
+        name: path.basename(f.path),
+        language: f.language || path.extname(f.path).replace('.', '') || 'plaintext',
+      }));
+
+    this.postMessage({ type: 'fileSearchResults', searchResults: results });
+  }
+
+  private async handleGetFileContent(message: WebviewToExtensionMessage): Promise<void> {
+    const filePath = message.filePath;
+    if (!filePath) return;
+
+    try {
+      const uri = vscode.Uri.file(filePath);
+      const bytes = await vscode.workspace.fs.readFile(uri);
+      const content = Buffer.from(bytes).toString('utf-8');
+      this.postMessage({ type: 'fileContent', filePath, content });
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      this.postMessage({ type: 'error', error: `Failed to read file: ${errorMsg}` });
+    }
+  }
+
+  private handleListProjectFiles(): void {
+    const workspaceRoot = this.indexer.getWorkspaceRoot();
+    if (!workspaceRoot) return;
+
+    const IGNORE_DIRS = new Set([
+      'node_modules', '.git', '.next', '.nuxt', 'dist', 'build', 'out',
+      '.cache', '.vscode', '__pycache__', '.tox', 'venv', '.env',
+      'coverage', '.turbo', '.svelte-kit', 'target', 'vendor',
+    ]);
+    const IGNORE_FILES = new Set(['.DS_Store', 'Thumbs.db']);
+
+    const EXT_LANG: Record<string, string> = {
+      ts: 'typescript', tsx: 'typescriptreact', js: 'javascript', jsx: 'javascriptreact',
+      py: 'python', go: 'go', rs: 'rust', java: 'java', cs: 'csharp',
+      php: 'php', rb: 'ruby', html: 'html', css: 'css', scss: 'scss',
+      json: 'json', yaml: 'yaml', yml: 'yaml', md: 'markdown', txt: 'plaintext',
+      vue: 'vue', svelte: 'svelte', sh: 'shell', bash: 'shell',
+      sql: 'sql', xml: 'xml', toml: 'toml', env: 'env',
+    };
+
+    const results: Array<{
+      path: string;
+      relativePath: string;
+      name: string;
+      isDirectory: boolean;
+      language: string;
+    }> = [];
+
+    const walk = (dir: string, depth: number) => {
+      if (depth > 6 || results.length > 2000) return;
+      try {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+          if (IGNORE_FILES.has(entry.name)) continue;
+          if (entry.name.startsWith('.') && entry.isDirectory()) continue;
+
+          const fullPath = path.join(dir, entry.name);
+          const relPath = path.relative(workspaceRoot, fullPath);
+
+          if (entry.isDirectory()) {
+            if (IGNORE_DIRS.has(entry.name)) continue;
+            results.push({
+              path: fullPath,
+              relativePath: relPath,
+              name: entry.name,
+              isDirectory: true,
+              language: 'directory',
+            });
+            walk(fullPath, depth + 1);
+          } else {
+            const ext = entry.name.split('.').pop()?.toLowerCase() || '';
+            results.push({
+              path: fullPath,
+              relativePath: relPath,
+              name: entry.name,
+              isDirectory: false,
+              language: EXT_LANG[ext] || 'plaintext',
+            });
+          }
+        }
+      } catch {
+        // Permission denied or other error
+      }
+    };
+
+    walk(workspaceRoot, 0);
+
+    // Send directly via webview — bypasses typed postMessage since projectFiles has custom shape
+    this.webviewView?.webview.postMessage({ type: 'projectFiles', files: results });
+  }
+
+  private async handleWebSearch(message: WebviewToExtensionMessage): Promise<void> {
+    const query = message.text || '';
+    if (!query) return;
+
+    try {
+      const results = await WebSearchService.search(query, 8);
+      const formatted = WebSearchService.formatForContext(results);
+      this.webviewView?.webview.postMessage({
+        type: 'webSearchResults',
+        text: formatted,
+        results,
+        query,
+      });
+    } catch (err) {
+      console.error('[Andor WebSearch] Error:', err);
+      this.webviewView?.webview.postMessage({
+        type: 'webSearchResults',
+        text: 'Web search failed.',
+        results: [],
+        query,
+      });
+    }
+  }
+
+  private async handleFetchUrl(message: WebviewToExtensionMessage): Promise<void> {
+    const url = message.url || '';
+    if (!url) return;
+
+    try {
+      const page = await WebSearchService.fetchPageFull(url);
+      this.webviewView?.webview.postMessage({
+        type: 'urlContent',
+        url: page.url,
+        content: page.text,
+        title: page.title,
+        images: page.images.slice(0, 30),
+        links: page.links.slice(0, 50),
+        cssFiles: page.cssFiles,
+        jsFiles: page.jsFiles,
+        meta: page.meta,
+      });
+    } catch (err) {
+      console.error('[Andor] Fetch URL failed:', err);
+      // Try simple fallback
+      try {
+        const content = await WebSearchService.fetchPageContent(url);
+        this.webviewView?.webview.postMessage({ type: 'urlContent', url, content });
+      } catch {
+        this.webviewView?.webview.postMessage({ type: 'urlContent', url, content: 'Failed to fetch URL content.' });
+      }
+    }
+  }
+
+  private async handleImprovePrompt(message: WebviewToExtensionMessage): Promise<void> {
+    const text = message.text?.trim();
+    if (!text) return;
+
+    const improveSystemPrompt = `You are a prompt engineer for an AI coding agent.
+Improve the following user message to be more specific, actionable, and effective for a coding agent that can read files, write code, and run terminal commands.
+
+Rules:
+- Keep the original intent exactly
+- Add specific file/folder hints if implied
+- Add verification step (run tests, check errors)
+- Add "show diff" or "explain changes" at the end
+- Make it 2-4 sentences max
+- Do NOT add unnecessary complexity
+- Sound natural, not robotic
+
+Original message: "${text}"
+
+Return ONLY the improved prompt, nothing else.`;
+
+    // Use the model the user currently has selected
+    const modelToUse = message.model || await this.findFastModel();
+
+    try {
+      let improved = '';
+      await this.providerRegistry.streamCall(
+        [{ role: 'user', content: improveSystemPrompt }],
+        modelToUse,
+        {
+          onChunk: (chunk: string) => { improved += chunk; },
+          onDone: () => {
+            this.webviewView?.webview.postMessage({
+              type: 'improvedPrompt',
+              text: improved.trim(),
+            });
+          },
+          onError: (err: string) => {
+            console.error('[Andor] Improve prompt failed:', err);
+          },
+        },
+      );
+    } catch (err) {
+      console.error('[Andor] Improve prompt error:', err);
+    }
+  }
+
+  private handleStopAgents(): void {
+    if (this.orchestrator) {
+      this.orchestrator.stopAll();
+      console.log('[Andor] All agents stopped by user');
+    }
+  }
+
+  // === SERVICE KEY HANDLERS (Brave Search, Vision, etc.) ===
+  private static readonly SERVICE_KEY_PREFIX = 'serviceKey_';
+
+  private async handleSetServiceKey(message: WebviewToExtensionMessage): Promise<void> {
+    const { providerId, apiKey } = message;
+    if (!providerId || !apiKey) return;
+    const storageKey = WebviewBridge.SERVICE_KEY_PREFIX + providerId;
+    await this.context.secrets.store(storageKey, apiKey);
+
+    // Apply key immediately to the right service
+    if (providerId === 'brave') {
+      WebSearchService.setBraveApiKey(apiKey);
+    }
+
+    this.webviewView?.webview.postMessage({ type: 'serviceKeys', keys: await this.loadServiceKeys() });
+  }
+
+  private async handleDeleteServiceKey(message: WebviewToExtensionMessage): Promise<void> {
+    const { providerId } = message;
+    if (!providerId) return;
+    const storageKey = WebviewBridge.SERVICE_KEY_PREFIX + providerId;
+    await this.context.secrets.delete(storageKey);
+    this.webviewView?.webview.postMessage({ type: 'serviceKeys', keys: await this.loadServiceKeys() });
+  }
+
+  private async handleGetServiceKeys(): Promise<void> {
+    const keys = await this.loadServiceKeys();
+    this.webviewView?.webview.postMessage({ type: 'serviceKeys', keys });
+  }
+
+  private async loadServiceKeys(): Promise<Record<string, boolean>> {
+    const services = ['brave', 'vision'];
+    const result: Record<string, boolean> = {};
+    for (const svc of services) {
+      const val = await this.context.secrets.get(WebviewBridge.SERVICE_KEY_PREFIX + svc);
+      result[svc] = !!val;
+    }
+    return result;
+  }
+
+  async loadAndApplyServiceKeys(): Promise<void> {
+    const braveKey = await this.context.secrets.get(WebviewBridge.SERVICE_KEY_PREFIX + 'brave');
+    if (braveKey) {
+      WebSearchService.setBraveApiKey(braveKey);
+    }
+  }
+
+  // === WORKSPACE REINDEX ===
+  private async handleReindexWorkspace(): Promise<void> {
+    const workspaceRoot = this.indexer.getWorkspaceRoot();
+    if (!workspaceRoot) return;
+    try {
+      this.postMessage({ type: 'indexingStatus', indexingStatus: { state: 'indexing', progress: 0, totalFiles: 0, indexedFiles: 0, message: 'Re-indexing workspace...' } });
+      if (this.andorCore) {
+        await this.andorCore.initialize();
+      } else {
+        this.indexer.indexWorkspace();
+      }
+      this.postMessage({ type: 'indexingStatus', indexingStatus: { state: 'ready', progress: 100, totalFiles: 0, indexedFiles: 0, message: 'Workspace indexed' } });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.postMessage({ type: 'indexingStatus', indexingStatus: { state: 'error', progress: 0, totalFiles: 0, indexedFiles: 0, message: msg } });
+    }
+  }
+
+  private async handleGetIndexedFiles(): Promise<void> {
+    const allFiles = this.indexer.getAllFiles?.() || [];
+    this.webviewView?.webview.postMessage({ type: 'indexedFiles', files: allFiles });
+  }
+
+  private async findFastModel(): Promise<string> {
+    const configured = await this.providerRegistry.getConfiguredProviders();
+    // Find providers with API keys, prefer non-puter first for speed
+    const withKey = configured.filter(c => c.hasKey && c.provider.id !== 'puter');
+    if (withKey.length > 0) {
+      const p = withKey[0].provider;
+      const models = p.getModels();
+      if (models.length > 0) {
+        return `${p.id}::${models[0].id}`;
+      }
+    }
+    // Puter is always available as last resort
+    const puterProvider = configured.find(c => c.provider.id === 'puter');
+    if (puterProvider) {
+      return 'puter::gpt-4o-mini';
+    }
+    throw new Error('No AI provider configured. Please add an API key in Settings.');
+  }
+
+  private async handleGetMemory(): Promise<void> {
+    if (this.andorCore) {
+      try {
+        const memory = this.andorCore.getMemoryData();
+        this.postMessage({ type: 'memoryData', memory });
+      } catch (err) {
+        console.error('[Andor] Failed to get memory:', err);
+        this.postMessage({ type: 'memoryData', memory: null });
+      }
+    }
+  }
+
+  private async handleClearMemory(): Promise<void> {
+    if (this.andorCore) {
+      try {
+        await this.andorCore.clearMemory();
+        this.postMessage({ type: 'memoryData', memory: null });
+      } catch (err) {
+        console.error('[Andor] Failed to clear memory:', err);
+      }
     }
   }
 
@@ -202,11 +704,42 @@ export class WebviewBridge {
     
     const diagnostics = this.diagnosticsWatcher.getDiagnostics();
     console.log('[Andor] Got diagnostics:', diagnostics.length);
-    
+
+    // Rebuild import graph for changed files
+    if (this.importGraph) {
+      this.importGraph.build();
+    }
+
     const contextFiles = this.contextAssembler.assembleContext(userText, diagnostics);
     console.log('[Andor] Assembled context files:', contextFiles.length);
     
-    const systemPrompt = this.contextAssembler.buildSystemPrompt(contextFiles, diagnostics);
+    let systemPrompt = this.contextAssembler.buildSystemPrompt(contextFiles, diagnostics);
+    
+    // Append mode/thinking instructions from webview
+    if (message.systemPrompt) {
+      systemPrompt += '\n' + message.systemPrompt;
+    }
+
+    // Add core behavior instructions
+    systemPrompt += ANDOR_BEHAVIOR_PROMPT;
+
+    // Add cloud context if detected
+    const workspaceRoot = this.indexer.getWorkspaceRoot();
+    if (workspaceRoot) {
+      const cloudCtx = CloudDetector.detect(workspaceRoot);
+      const cloudPrompt = CloudDetector.formatForPrompt(cloudCtx);
+      if (cloudPrompt) {
+        systemPrompt += '\n' + cloudPrompt;
+      }
+    }
+
+    // Log relevance scoring info (for debugging / future Context Inspector UI)
+    if (this.relevanceScorer) {
+      const scored = this.relevanceScorer.scoreFiles(userText, diagnostics);
+      const included = this.relevanceScorer.getIncludedFiles(scored);
+      console.log(`[Andor] Relevance scorer: ${scored.length} files scored, ${included.length} included in context`);
+    }
+
     console.log('[Andor] Built system prompt, length:', systemPrompt.length);
 
     console.log('[Andor] Posting context to webview');
@@ -338,7 +871,24 @@ export class WebviewBridge {
           resolve({ output: output || '(no output)', exitCode: err?.code ?? 0 });
         });
       });
-      this.postMessage({ type: 'terminalResult', output: result.output, exitCode: result.exitCode });
+
+      // Parse terminal output for structured errors
+      const parsed = TerminalParser.parse(result.output, result.exitCode);
+      if (!parsed.isSuccess && parsed.errors.length > 0) {
+        const errorSummary = TerminalParser.formatForAI(parsed);
+        console.log(`[Andor] Terminal errors detected (${parsed.errors.length}):`, errorSummary.substring(0, 200));
+        // Send enriched result with parsed error info
+        this.webviewView?.webview.postMessage({
+          type: 'terminalResult',
+          output: result.output,
+          exitCode: result.exitCode,
+          parsedErrors: parsed.errors,
+          errorSummary,
+          suggestedFix: parsed.suggestedFix,
+        });
+      } else {
+        this.postMessage({ type: 'terminalResult', output: result.output, exitCode: result.exitCode });
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       this.postMessage({ type: 'terminalResult', output: `Error: ${msg}`, exitCode: 1 });
@@ -643,10 +1193,33 @@ export class WebviewBridge {
     const userText = message.text || '';
     const history = message.history || [];
 
+    // Rebuild import graph on each request for fresh data
+    if (this.importGraph) {
+      this.importGraph.build();
+    }
+
     // Assemble context/system prompt
     const diagnostics = this.diagnosticsWatcher.getDiagnostics();
     const contextFiles = this.contextAssembler.assembleContext(userText, diagnostics);
-    const systemPrompt = this.contextAssembler.buildSystemPrompt(contextFiles, diagnostics);
+    let systemPrompt = this.contextAssembler.buildSystemPrompt(contextFiles, diagnostics);
+
+    // Append mode/thinking instructions from webview
+    if (message.systemPrompt) {
+      systemPrompt += '\n' + message.systemPrompt;
+    }
+
+    // Add core behavior instructions
+    systemPrompt += ANDOR_BEHAVIOR_PROMPT;
+
+    // Add cloud context if detected
+    const wsRoot = this.indexer.getWorkspaceRoot();
+    if (wsRoot) {
+      const cloudCtx = CloudDetector.detect(wsRoot);
+      const cloudPrompt = CloudDetector.formatForPrompt(cloudCtx);
+      if (cloudPrompt) {
+        systemPrompt += '\n' + cloudPrompt;
+      }
+    }
 
     // Send context files to webview for display
     this.postMessage({
@@ -681,28 +1254,30 @@ export class WebviewBridge {
     }
     aiMessages.push({ role: 'user', content: userText });
 
-    // Stream with the provider
+    // Stream with session continuity (automatic retry, fallback, context management)
+    const streamCallbacks = {
+      onChunk: (text: string) => {
+        this.postMessage({ type: 'streamChunk', text });
+      },
+      onDone: (fullText: string, response: { model: string; provider: string }) => {
+        this.postMessage({
+          type: 'streamDone',
+          text: fullText,
+          model: response.model,
+          provider: response.provider,
+        });
+      },
+      onError: (error: string) => {
+        this.postMessage({ type: 'streamError', error });
+      },
+    };
+
     try {
-      await this.providerRegistry.streamCall(
-        aiMessages,
-        modelSpec,
-        {
-          onChunk: (text: string) => {
-            this.postMessage({ type: 'streamChunk', text });
-          },
-          onDone: (fullText: string, response) => {
-            this.postMessage({
-              type: 'streamDone',
-              text: fullText,
-              model: response.model,
-              provider: response.provider,
-            });
-          },
-          onError: (error: string) => {
-            this.postMessage({ type: 'streamError', error });
-          },
-        },
-      );
+      if (this.sessionContinuity) {
+        await this.sessionContinuity.resilientStreamCall(aiMessages, modelSpec, streamCallbacks);
+      } else {
+        await this.providerRegistry.streamCall(aiMessages, modelSpec, streamCallbacks);
+      }
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : String(err);
       this.postMessage({ type: 'streamError', error: errMsg });
