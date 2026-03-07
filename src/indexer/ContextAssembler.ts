@@ -4,8 +4,9 @@ import * as fs from 'fs';
 import { WorkspaceIndexer } from './WorkspaceIndexer';
 import { ContextFile, DiagnosticEntry } from '../types';
 
-const MAX_CONTEXT_FILES = 8;
+const MAX_CONTEXT_FILES = 6;
 const MAX_FILE_SIZE = 4_000;
+const MIN_RELEVANCE_SCORE = 20; // Only include files with meaningful relevance
 
 export class ContextAssembler {
   private indexer: WorkspaceIndexer;
@@ -91,8 +92,9 @@ export class ContextAssembler {
       }
     }
 
-    // Sort by score and pick top files
+    // Sort by score, filter by minimum relevance, and pick top files
     const sortedFiles = Array.from(scored.entries())
+      .filter(([, { score }]) => score >= MIN_RELEVANCE_SCORE)
       .sort((a, b) => b[1].score - a[1].score)
       .slice(0, MAX_CONTEXT_FILES);
 
@@ -124,7 +126,9 @@ export class ContextAssembler {
   buildSystemPrompt(contextFiles: ContextFile[], diagnostics: DiagnosticEntry[]): string {
     const workspaceRoot = this.indexer.getWorkspaceRoot() || 'unknown';
     const index = this.indexer.getIndex();
-    const allFiles = Array.from(index.files.values()).map(f => f.relativePath).slice(0, 80);
+    // Build full file tree grouped by directory
+    const allFileInfos = Array.from(index.files.values());
+    const allFiles = allFileInfos.map(f => f.relativePath);
 
     let prompt = `You are Andor, an advanced AI coding agent embedded in VS Code. You have full access to the user's codebase and can read, write, debug, refactor, and reason about any code.
 
@@ -204,17 +208,40 @@ When a task is COMPLETE:
 
 ## RULES
 - ALWAYS use write: blocks to actually create/modify files (never just show code without applying it)
+- Files are written LIVE as you stream — they apply the moment the block closes, no manual approval needed
 - For destructive changes, explain what will be overwritten
 - Keep responses focused — no unnecessary padding or filler
 - If you need to read a file not in context, say: "I need to see [filename] — please mention it so I can include it"
 - Never hallucinate file contents — only work with what's provided in context
 - Prefer editing existing files over creating new ones unless the task requires new files
 - When fixing bugs, address the root cause, not symptoms
+
+## MULTI-FILE PROJECT AWARENESS (CRITICAL)
+
+This project may have 100+ files. You have the full file tree above. When making changes:
+
+1. **Trace the impact** — Before changing any file, check: what imports it? What does it export? Who depends on it?
+2. **Update all callers** — If you rename a function, interface, or type, find ALL files that use it in the file tree and update them too.
+3. **Maintain import consistency** — When adding new exports, check if any existing file should import them.
+4. **Don't break the build** — After multi-file changes, mentally verify: do all imports resolve? Are all types satisfied?
+5. **Write ALL affected files** — Never stop at one file if a change ripples. Write every affected file in the same response.
+6. **Dependency order** — Write files in this order: types/interfaces → utilities → services → components → tests.
+7. **Check the full file tree** — Use the WORKSPACE FILE TREE section to discover related files you might not have in context.
 `;
 
     if (allFiles.length > 0) {
-      prompt += `\n## WORKSPACE FILES (${allFiles.length} indexed)\n`;
-      prompt += allFiles.join(', ') + '\n';
+      // Group files by top-level directory for better AI comprehension of large projects
+      const byDir = new Map<string, string[]>();
+      for (const f of allFiles) {
+        const parts = f.split('/');
+        const dir = parts.length > 1 ? parts[0] : '.';
+        if (!byDir.has(dir)) { byDir.set(dir, []); }
+        byDir.get(dir)!.push(f);
+      }
+      prompt += `\n## WORKSPACE FILE TREE (${allFiles.length} files total)\n`;
+      for (const [dir, files] of Array.from(byDir.entries()).sort()) {
+        prompt += `\n**${dir}/**: ${files.join(', ')}\n`;
+      }
     }
 
     if (contextFiles.length > 0) {
