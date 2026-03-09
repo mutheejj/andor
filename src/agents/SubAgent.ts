@@ -7,6 +7,16 @@ import { AgentMemory } from './AgentMemory';
 import { ProviderRegistry } from '../providers';
 import { AIMessage, AIStreamCallbacks } from '../providers/base';
 
+interface ParsedAgentResponse {
+  analysis: string;
+  plan: string;
+  execution: string;
+  verification: string;
+  blockers: string;
+  completion: 'complete' | 'incomplete' | 'blocked';
+  raw: string;
+}
+
 export class SubAgent {
   readonly id: string;
   readonly role: AgentConfig['role'];
@@ -23,6 +33,7 @@ export class SubAgent {
   private startedAt = 0;
   private stopRequested = false;
   private iterationCount = 0;
+  private latestStructuredResponse: ParsedAgentResponse | null = null;
 
   constructor(
     config: AgentConfig,
@@ -54,6 +65,7 @@ export class SubAgent {
     this.conversationHistory = [];
     this.iterationCount = 0;
     this.stopRequested = false;
+    this.latestStructuredResponse = null;
   }
 
   /** Start executing the assigned task */
@@ -94,29 +106,40 @@ export class SubAgent {
         const response = await this.callModel();
         if (!response) {
           if (this.stopRequested) break;
-          // Retry once on failure
+          this.postProgress('Model call failed, retrying once...');
           const retry = await this.callModel();
-          if (!retry) break;
-          fullOutput += retry;
+          if (!retry) {
+            return this.makeResult('failure', 'Model did not return a usable response after retry.', 'Model call failed twice');
+          }
+          fullOutput = retry;
         } else {
-          fullOutput += response;
+          fullOutput = response;
         }
 
+        const parsed = this.parseStructuredResponse(fullOutput);
+        this.latestStructuredResponse = parsed;
         this.conversationHistory.push({ role: 'assistant', content: fullOutput });
         this.stepsCompleted = this.iterationCount;
 
-        // Check if the agent considers itself done
-        if (this.isTaskComplete(fullOutput)) {
+        const progressSummary = this.summarizeProgress(parsed);
+        if (progressSummary) {
+          this.currentStep = progressSummary;
+          this.postProgress(progressSummary);
+        }
+
+        if (this.isTaskComplete(parsed)) {
           break;
         }
 
-        // If not done, add a continuation prompt
+        if (parsed.completion === 'blocked') {
+          return this.makeResult('partial', fullOutput, this.extractBlockerMessage(parsed));
+        }
+
+        const continuationPrompt = this.buildContinuationPrompt(parsed);
         this.conversationHistory.push({
           role: 'user',
-          content: 'Continue. If you are done, end with "TASK_COMPLETE".',
+          content: continuationPrompt,
         });
-
-        fullOutput = ''; // Reset for next iteration
       }
 
       this.stopHeartbeat();
@@ -135,7 +158,7 @@ export class SubAgent {
       this.status = 'failed';
       const errorMsg = err instanceof Error ? err.message : String(err);
       this.postProgress(`Failed: ${errorMsg}`);
-      return this.makeResult('failure', errorMsg);
+      return this.makeResult('failure', errorMsg, errorMsg);
     }
   }
 
@@ -185,16 +208,42 @@ export class SubAgent {
 
   private buildSystemPrompt(): string {
     const rolePrompts: Record<string, string> = {
-      coder: `You are an expert code writer. Write clean, type-safe, production-quality code. Use write: blocks for file creation. Focus on implementation, not explanation.`,
-      debugger: `You are an expert debugger. Analyze errors systematically: read the error, trace the cause, fix the root issue. Never guess — reason from evidence.`,
-      tester: `You are a test engineer. Write comprehensive tests covering edge cases. Use the project's existing test framework. Verify tests pass.`,
-      reviewer: `You are a code reviewer. Check for: bugs, type errors, security issues, performance problems, style violations. Be specific and actionable.`,
-      researcher: `You are a codebase researcher. Read and understand code structure, dependencies, and patterns. Report findings clearly.`,
-      terminal: `You are a terminal specialist. Run commands, read output, diagnose failures. Use run: blocks for commands.`,
-      planner: `You are a task planner. Break complex tasks into specific, actionable sub-tasks. Each sub-task should be completable by one agent.`,
+      coder: `You are a senior software engineer focused on implementation. Produce minimal, correct, production-ready changes that fit the existing architecture.`,
+      debugger: `You are a senior debugging engineer. Start from evidence, isolate the root cause, explain the failure chain, and propose the smallest reliable fix.`,
+      tester: `You are a senior test engineer. Design tests that validate behavior, regressions, and edge cases using the existing testing patterns in the repository.`,
+      reviewer: `You are a senior code reviewer. Look for correctness, maintainability, security, performance, and architectural drift. Be concrete and prioritised.`,
+      researcher: `You are a senior codebase researcher. Build an accurate mental model of responsibilities, call flows, invariants, and high-risk areas before concluding.`,
+      terminal: `You are a senior terminal and runtime specialist. Suggest or execute the most informative commands, interpret outputs precisely, and surface actionable next steps.`,
+      planner: `You are a senior engineering planner. Decompose work into clear, dependency-aware tasks that can be executed independently with strong handoff quality.`,
     };
 
-    return rolePrompts[this.role] || rolePrompts.coder;
+    return `${rolePrompts[this.role] || rolePrompts.coder}
+
+Operating rules:
+- First understand the task and relevant code before concluding.
+- Prefer root-cause fixes over superficial patches.
+- Be explicit about assumptions and blockers.
+- If evidence is insufficient, say what must be checked next.
+- Keep outputs concise but concrete.
+
+Response format:
+## Analysis
+Short understanding of the problem, relevant files, architecture, and constraints.
+
+## Plan
+Numbered plan for the next concrete actions.
+
+## Execution
+What you did, found, or would change. Reference files/functions when relevant.
+
+## Verification
+How the result was verified, or why verification is still pending.
+
+## Blockers
+State blockers or write "None".
+
+## Completion
+Write exactly one of: COMPLETE, INCOMPLETE, BLOCKED`;
   }
 
   private buildTaskMessage(): string {
@@ -227,15 +276,84 @@ export class SubAgent {
       parts.push(`## Work completed by other agents\n${relevantWork.join('\n')}`);
     }
 
-    parts.push('\nWhen done, end your response with "TASK_COMPLETE".');
+    parts.push('## Expectations\nAct like a senior engineer. Understand first, then act. Ground claims in the provided context. Keep the response in the required sectioned format. Mark Completion as COMPLETE only if the assigned task is actually finished.');
 
     return parts.join('\n\n');
   }
 
-  private isTaskComplete(output: string): boolean {
-    return output.includes('TASK_COMPLETE') ||
-           output.includes('Task complete') ||
-           output.includes('task complete');
+  private parseStructuredResponse(output: string): ParsedAgentResponse {
+    const readSection = (name: string, fallback = ''): string => {
+      const pattern = new RegExp(`## ${name}\\s*([\\s\\S]*?)(?=\\n## [A-Za-z]+|$)`, 'i');
+      const match = output.match(pattern);
+      return match?.[1]?.trim() || fallback;
+    };
+
+    const completionRaw = readSection('Completion', '').toUpperCase();
+    let completion: ParsedAgentResponse['completion'] = 'incomplete';
+    if (completionRaw.includes('COMPLETE')) {
+      completion = 'complete';
+    }
+    if (completionRaw.includes('BLOCKED')) {
+      completion = 'blocked';
+    }
+    if (completionRaw.includes('INCOMPLETE')) {
+      completion = 'incomplete';
+    }
+
+    return {
+      analysis: readSection('Analysis'),
+      plan: readSection('Plan'),
+      execution: readSection('Execution'),
+      verification: readSection('Verification'),
+      blockers: readSection('Blockers', 'None'),
+      completion,
+      raw: output,
+    };
+  }
+
+  private isTaskComplete(response: ParsedAgentResponse): boolean {
+    if (response.completion === 'complete') {
+      return true;
+    }
+
+    const raw = response.raw;
+    return raw.includes('TASK_COMPLETE') ||
+           raw.includes('Task complete') ||
+           raw.includes('task complete');
+  }
+
+  private summarizeProgress(response: ParsedAgentResponse): string {
+    const candidate = response.execution || response.plan || response.analysis;
+    const normalized = candidate.replace(/\s+/g, ' ').trim();
+    if (!normalized) {
+      return `Step ${this.iterationCount}`;
+    }
+    return normalized.slice(0, 140);
+  }
+
+  private buildContinuationPrompt(response: ParsedAgentResponse): string {
+    const blockers = response.blockers && response.blockers.toLowerCase() !== 'none'
+      ? `Current blockers:\n${response.blockers}`
+      : 'Current blockers: None identified.';
+
+    return `Continue the assigned task using the same response format.
+
+Previous execution summary:
+${response.execution || 'No execution details were provided.'}
+
+Previous verification summary:
+${response.verification || 'No verification details were provided.'}
+
+${blockers}
+
+If the task is still not complete, refine the plan and continue. If you cannot proceed due to missing information or permissions, mark Completion as BLOCKED.`;
+  }
+
+  private extractBlockerMessage(response: ParsedAgentResponse): string {
+    const blockerText = response.blockers && response.blockers.toLowerCase() !== 'none'
+      ? response.blockers
+      : 'Task is blocked and requires additional input or execution capability.';
+    return blockerText;
   }
 
   private postProgress(content: string): void {
@@ -254,6 +372,7 @@ export class SubAgent {
   private makeResult(
     status: AgentResult['status'],
     output: string,
+    error?: string,
   ): AgentResult {
     return {
       agentId: this.id,
@@ -264,6 +383,7 @@ export class SubAgent {
       commandsRun: this.commandsRun,
       tokensUsed: this.tokensUsed,
       durationMs: this.getDurationMs(),
+      error,
     };
   }
 

@@ -1,0 +1,85 @@
+--- /home/muthee/projects/andor/webview-ui/src/App.tsx
++++ /home/muthee/projects/andor/webview-ui/src/App.tsx
+@@ -370,76 +370,16 @@
+   return (
+     <div className="flex flex-col h-screen overflow-hidden" style={{ background: 'var(--vscode-sideBar-background)', color: 'var(--vscode-sideBar-foreground)' }}>
+       {/* Header */}
+-      <div className="flex items-center justify-between px-3 py-2 flex-shrink-0" style={{ borderBottom: '1px solid var(--vscode-panel-border)', minHeight: '44px' }}>
+-        <div className="flex items-center gap-2">
+-          <div className="w-6 h-6 rounded-md flex items-center justify-center text-[12px]" style={{ background: 'var(--vscode-button-background)', color: 'var(--vscode-button-foreground)' }}>
+-            ⬡
+-          </div>
+-          <span className="text-sm font-bold tracking-wide" style={{ color: 'var(--vscode-foreground)' }}>Andor</span>
+-          {authStatus.signedIn && authStatus.username && (
+-            <span className="text-[10px] px-1.5 py-0.5 rounded-full opacity-60" style={{ background: 'var(--vscode-badge-background)', color: 'var(--vscode-badge-foreground)' }}>
+-              {authStatus.username}
+-            </span>
+-          )}
+-        </div>
+-        <div className="flex items-center gap-1">
+-          {authError && (
+-            <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'var(--vscode-inputValidation-errorBackground, #5a1d1d)', color: 'var(--vscode-inputValidation-errorForeground, #f48771)' }} title={authError}>⚠</span>
+-          )}
+-          {checkpoints.length > 0 && (
+-            <button
+-              onClick={() => setShowCheckpoints(v => !v)}
+-              className="text-[10px] px-2 py-1 rounded transition-opacity hover:opacity-100 opacity-70"
+-              style={{ background: 'var(--vscode-input-background)', color: 'var(--vscode-foreground)' }}
+-              title="View checkpoints / revert"
+-            >
+-              ↩ {checkpoints.length}
+-            </button>
+-          )}
+-          <button
+-            onClick={handleClearHistory}
+-            className="text-[10px] px-2 py-1 rounded transition-opacity hover:opacity-100 opacity-80"
+-            style={{ background: 'var(--vscode-button-background)', color: 'var(--vscode-button-foreground)' }}
+-            title="New Chat"
+-          >
+-            + New
+-          </button>
+-          <button
+-            onClick={() => { setShowMemory(true); postMessage({ type: 'getMemory' }); }}
+-            className="text-[10px] px-2 py-1 rounded transition-opacity hover:opacity-100 opacity-70"
+-            style={{ background: 'var(--vscode-input-background)', color: 'var(--vscode-foreground)' }}
+-            title="Memory & learned context"
+-          >
+-            🧠
+-          </button>
+-          <button
+-            onClick={() => setShowSettings(true)}
+-            className="text-[10px] px-2 py-1 rounded transition-opacity hover:opacity-100 opacity-70"
+-            style={{ background: 'var(--vscode-input-background)', color: 'var(--vscode-foreground)' }}
+-            title="Settings"
+-          >
+-            ⚙
+-          </button>
+-          {authStatus.signedIn ? (
+-            <button
+-              onClick={handleSignOut}
+-              className="text-[10px] px-2 py-1 rounded opacity-70 hover:opacity-100"
+-              style={{ background: 'var(--vscode-input-background)', color: 'var(--vscode-foreground)' }}
+-              title={`Sign out (${authStatus.username || ''})`}
+-            >
+-              Sign out
+-            </button>
+-          ) : (
+-            <button
+-              onClick={handleSignIn}
+-              className="text-[10px] px-2 py-1 rounded transition-opacity hover:opacity-100 opacity-90"
+-              style={{ background: 'var(--vscode-button-background)', color: 'var(--vscode-button-foreground)' }}
+-              title="Sign in with Puter"
+-            >
+-              Sign in
+-            </button>
+-          )}
+-        </div>
+-      </div>
++      <Header 
++        onNewChat={handleClearHistory}
++        onOpenAgents={() => {}}
++        onOpenMarketplace={() => {}}
++        onOpenHistory={() => {}}
++        onOpenProfile={() => {}}
++        onOpenSettings={() => setShowSettings(true)}
++      />

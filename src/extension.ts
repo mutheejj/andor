@@ -4,6 +4,7 @@ import { ContextAssembler } from './indexer/ContextAssembler';
 import { DiagnosticsWatcher } from './indexer/DiagnosticsWatcher';
 import { WebviewBridge } from './webview/WebviewBridge';
 import { PuterCoderViewProvider } from './webview/panel';
+import { AgentManagerPanel } from './webview/AgentManagerPanel';
 import { PuterAuthServer } from './auth/PuterAuthServer';
 import { initializeProviders, ProviderRegistry } from './providers';
 import { AndorAutocompleteProvider } from './providers/AutocompleteProvider';
@@ -29,6 +30,7 @@ export async function activate(context: vscode.ExtensionContext) {
 	learningService = new LearningService(context);
 	learningService.initialize().catch(err => console.error('[Andor] Learning init failed:', err));
 	const bridge = new WebviewBridge(indexer, contextAssembler, diagnosticsWatcher, context, authServer, providerRegistry, learningService);
+	const agentManagerPanel = new AgentManagerPanel(context.extensionUri, bridge);
 
 	const viewProvider = new PuterCoderViewProvider(context.extensionUri, bridge);
 
@@ -67,6 +69,12 @@ export async function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(
 		vscode.commands.registerCommand('andor.openChat', () => {
 			vscode.commands.executeCommand('andor.chatView.focus');
+		}),
+	);
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand('andor.openAgentManager', () => {
+			agentManagerPanel.openPanel();
 		}),
 	);
 
@@ -124,6 +132,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			indexer.dispose();
 			diagnosticsWatcher.dispose();
 			authServer.stopServer();
+			agentManagerPanel.dispose();
 			autocompleteProvider?.dispose();
 		},
 	});

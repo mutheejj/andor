@@ -6,7 +6,17 @@ import { FileInfo, SymbolInfo, ImportInfo, WorkspaceIndex } from '../types';
 const IGNORED_DIRS = new Set([
   'node_modules', '.git', 'dist', 'out', 'build', '.next',
   '.nuxt', 'coverage', '.cache', '__pycache__', '.vscode-test',
-  'vendor', '.turbo', '.output',
+  'vendor', '.turbo', '.output', '.svelte-kit', '.parcel-cache', '.pnpm-store',
+  '.yarn', '.idea', '.husky', 'tmp', 'temp', 'logs', '.pytest_cache', '.mypy_cache',
+]);
+
+const IGNORED_FILE_NAMES = new Set([
+  'package-lock.json',
+  'yarn.lock',
+  'pnpm-lock.yaml',
+  'bun.lockb',
+  '.DS_Store',
+  'Thumbs.db',
 ]);
 
 const SUPPORTED_EXTENSIONS = new Set([
@@ -84,6 +94,9 @@ export class WorkspaceIndexer {
             results.push(...subFiles);
           }
         } else if (entry.isFile()) {
+          if (IGNORED_FILE_NAMES.has(entry.name)) {
+            continue;
+          }
           const ext = path.extname(entry.name).toLowerCase();
           if (SUPPORTED_EXTENSIONS.has(ext)) {
             results.push(fullPath);
@@ -261,7 +274,13 @@ export class WorkspaceIndexer {
     }
     const relative = path.relative(this.workspaceRoot, filePath);
     const parts = relative.split(path.sep);
-    return !parts.some(p => IGNORED_DIRS.has(p));
+    if (parts.some(p => IGNORED_DIRS.has(p))) {
+      return false;
+    }
+    if (IGNORED_FILE_NAMES.has(path.basename(filePath))) {
+      return false;
+    }
+    return true;
   }
 
   private trackRecentFile(filePath: string): void {

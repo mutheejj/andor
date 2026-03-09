@@ -3,6 +3,7 @@ import React, { useRef, useCallback } from 'react';
 interface ImageUploaderProps {
   images: string[];
   onImagesChange: (images: string[]) => void;
+  onReadyTrigger?: (trigger: () => void) => void;
 }
 
 // Compress image to reduce token count
@@ -38,8 +39,12 @@ function compressImage(base64: string, maxWidth: number = 800, maxHeight: number
   });
 }
 
-export function ImageUploader({ images, onImagesChange }: ImageUploaderProps) {
+export function ImageUploader({ images, onImagesChange, onReadyTrigger }: ImageUploaderProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  React.useEffect(() => {
+    onReadyTrigger?.(() => fileInputRef.current?.click());
+  }, [onReadyTrigger]);
 
   const handleFiles = useCallback(async (files: FileList | null) => {
     if (!files) return;

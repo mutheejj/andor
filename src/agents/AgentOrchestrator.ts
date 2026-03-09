@@ -30,6 +30,16 @@ export class AgentOrchestrator {
   private onDashboardUpdate?: DashboardUpdateCallback;
   private stopRequested = false;
 
+  private static readonly COMPLEXITY_PATTERNS = [
+    /\b(and then|also|additionally|furthermore)\b/,
+    /\b(multiple files|several files|across|all files)\b/,
+    /\b(refactor|migrate|redesign|restructure|overhaul)\b/,
+    /\b(add tests|write tests|test coverage)\b/,
+    /\b(debug.+and.+fix|fix.+and.+test)\b/,
+    /\b(review.+and|audit|investigate|analyze)\b/,
+    /\b(architecture|orchestration|workflow|experience|documentation)\b/,
+  ];
+
   constructor(private providerRegistry: ProviderRegistry) {
     this.comm = new AgentCommunication();
     this.pool = new AgentPool(this.comm, DEFAULT_HEARTBEAT_TIMEOUT, DEFAULT_MAX_RUNTIME_MS);
@@ -124,22 +134,14 @@ export class AgentOrchestrator {
   /** Analyze task complexity to decide single vs multi-agent */
   private analyzeComplexity(message: string): 'simple' | 'complex' {
     const lower = message.toLowerCase();
-    const complexSignals = [
-      /\b(and then|also|additionally|furthermore)\b/,
-      /\b(multiple files|several files|across|all files)\b/,
-      /\b(refactor|migrate|redesign|restructure|overhaul)\b/,
-      /\b(add tests|write tests|test coverage)\b/,
-      /\b(debug.+and.+fix|fix.+and.+test)\b/,
-      /\b(review.+and|audit)\b/,
-    ];
 
     let complexCount = 0;
-    for (const pattern of complexSignals) {
+    for (const pattern of AgentOrchestrator.COMPLEXITY_PATTERNS) {
       if (pattern.test(lower)) complexCount++;
     }
 
-    // Also check message length — long messages tend to be complex
     if (message.length > 300) complexCount++;
+    if (message.length > 700) complexCount++;
 
     return complexCount >= 2 ? 'complex' : 'simple';
   }
@@ -187,14 +189,19 @@ export class AgentOrchestrator {
   /** Plan sub-tasks by asking a planner model */
   private async planTasks(
     userMessage: string,
-    _systemPrompt: string,
+    systemPrompt: string,
   ): Promise<AgentPlan | null> {
     const plannerModel = this.modelSelector.selectForRole('planner');
     if (!plannerModel) return null;
 
-    const planPrompt = `You are a task planner for a coding AI system. Break this task into 2-5 parallel sub-tasks.
+    const planPrompt = `You are the orchestrator planner for a senior AI coding system.
+
+Your job is to break the request into 2-5 high-quality sub-tasks that maximize correctness, parallelism where appropriate, and verification quality.
 
 User task: "${userMessage}"
+
+System behavior guidance:
+${systemPrompt}
 
 Respond with a JSON array of sub-tasks:
 [
@@ -202,11 +209,14 @@ Respond with a JSON array of sub-tasks:
 ]
 
 Rules:
-- Each sub-task should be specific and completable independently
-- Use dependencies array to indicate which tasks must finish first (by index)
-- Priority 1-10 (10=highest)
-- Prefer parallel execution where possible
-- Only use roles that match the work needed
+- Start with research or debugging when understanding is incomplete.
+- Add a reviewer or tester step when validation matters.
+- Use dependencies array to indicate which tasks must finish first (by index).
+- Priority 1-10 (10=highest).
+- Prefer parallel execution only when tasks are truly independent.
+- Only use roles that match the work needed.
+- Avoid redundant steps.
+- Descriptions must mention the likely artifact, area, or expected outcome.
 - Return ONLY the JSON array, nothing else`;
 
     try {
@@ -323,7 +333,7 @@ Rules:
     }
 
     // Synthesize final result
-    const allOutput = results.map(r => `[${r.agentId}] ${r.output}`).join('\n\n---\n\n');
+    const allOutput = this.buildFinalSummary(plan, results);
     const allFiles = results.flatMap(r => r.filesModified);
     const allCommands = results.flatMap(r => r.commandsRun);
     const totalTokens = results.reduce((sum, r) => sum + r.tokensUsed, 0);
@@ -339,6 +349,45 @@ Rules:
       tokensUsed: totalTokens,
       durationMs: Date.now() - this.startedAt,
     };
+  }
+
+  private buildFinalSummary(plan: AgentPlan, results: AgentResult[]): string {
+    const stepSummaries = plan.steps.map(step => {
+      const matched = results.find(result => result.taskId === step.id);
+      const status = matched?.status ?? step.status;
+      const output = matched?.output?.trim() || 'No output captured.';
+      const condensed = output.replace(/\s+/g, ' ').slice(0, 500);
+      return `- [${status}] ${step.assignedRole}: ${step.description}\n  ${condensed}`;
+    }).join('\n');
+
+    const blockers = results
+      .filter(result => result.status === 'failure' || result.status === 'partial' || result.error)
+      .map(result => `- ${result.agentId}: ${result.error || result.output}`)
+      .join('\n');
+
+    const verificationNotes = results
+      .map(result => result.output)
+      .filter(Boolean)
+      .map(output => {
+        const match = output.match(/## Verification\s*([\s\S]*?)(?=\n## [A-Za-z]+|$)/i);
+        return match?.[1]?.trim();
+      })
+      .filter((note): note is string => Boolean(note))
+      .map(note => `- ${note.replace(/\s+/g, ' ').slice(0, 300)}`)
+      .join('\n');
+
+    return [
+      '## Orchestrator Summary',
+      '',
+      '### Plan Execution',
+      stepSummaries || '- No plan steps were executed.',
+      '',
+      '### Verification',
+      verificationNotes || '- Verification details were not provided by sub-agents.',
+      '',
+      '### Blockers',
+      blockers || '- None',
+    ].join('\n');
   }
 
   /** Synchronous model call (non-streaming, for planner) */

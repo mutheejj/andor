@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as cp from 'child_process';
-import { WebviewToExtensionMessage, ExtensionToWebviewMessage, DiffResult, AllowlistFile, ProviderInfo, ModelInfo } from '../types';
+import { WebviewToExtensionMessage, ExtensionToWebviewMessage, DiffResult, AllowlistFile, ProviderInfo, ModelInfo, SettingsState } from '../types';
 
 import { WorkspaceIndexer } from '../indexer/WorkspaceIndexer';
 import { ContextAssembler as OldContextAssembler } from '../indexer/ContextAssembler';
@@ -10,7 +10,7 @@ import { DiagnosticsWatcher } from '../indexer/DiagnosticsWatcher';
 import { AndorCore } from '../core/AndorCore';
 import { PuterAuthServer } from '../auth/PuterAuthServer';
 import { ProviderRegistry, isPuterModel } from '../providers';
-import { AIMessage } from '../providers/base';
+import { AIMessage, AIProvider, ProviderModel } from '../providers/base';
 import { LearningService } from '../learning';
 import { WebSearchService } from '../services/WebSearchService';
 import { AgentOrchestrator } from '../agents/AgentOrchestrator';
@@ -48,6 +48,123 @@ const AUTO_ALLOWED = [
   /^npm --version$/,
 ];
 
+const SETTINGS_STATE_KEY = 'andor.settingsState';
+
+const DEFAULT_SETTINGS_STATE: SettingsState = {
+  profiles: [
+    {
+      id: 'llama-3.3-70b',
+      name: 'Llama 3.3 70B',
+      provider: 'nvidia',
+      baseUrl: 'https://integrate.api.nvidia.com/v1',
+      model: 'nvidia::meta/llama-3.3-70b-instruct',
+      supportsImages: false,
+      supportsPromptCaching: false,
+      inputPrice: 0,
+      outputPrice: 0,
+      maxTokens: -1,
+      contextWindow: 131072,
+      reasoningParameters: true,
+      sendMaxTokens: false,
+      enableStreaming: true,
+      customHeaders: [],
+    },
+    {
+      id: 'llama-vision',
+      name: 'Llama 3.2 Vision',
+      provider: 'nvidia',
+      baseUrl: 'https://integrate.api.nvidia.com/v1',
+      model: 'nvidia::meta/llama-3.2-90b-vision-instruct',
+      supportsImages: true,
+      supportsPromptCaching: false,
+      inputPrice: 0,
+      outputPrice: 0,
+      maxTokens: -1,
+      contextWindow: 128000,
+      reasoningParameters: false,
+      sendMaxTokens: false,
+      enableStreaming: true,
+      customHeaders: [],
+    },
+    {
+      id: 'qwen-coder',
+      name: 'Qwen 2.5 Coder',
+      provider: 'nvidia',
+      baseUrl: 'https://integrate.api.nvidia.com/v1',
+      model: 'nvidia::qwen/qwen2.5-coder-32b-instruct',
+      supportsImages: false,
+      supportsPromptCaching: false,
+      inputPrice: 0,
+      outputPrice: 0,
+      maxTokens: -1,
+      contextWindow: 131072,
+      reasoningParameters: false,
+      sendMaxTokens: false,
+      enableStreaming: true,
+      customHeaders: [],
+    },
+    {
+      id: 'llama-fast',
+      name: 'Llama 3.1 8B Fast',
+      provider: 'nvidia',
+      baseUrl: 'https://integrate.api.nvidia.com/v1',
+      model: 'nvidia::meta/llama-3.1-8b-instruct',
+      supportsImages: false,
+      supportsPromptCaching: false,
+      inputPrice: 0,
+      outputPrice: 0,
+      maxTokens: -1,
+      contextWindow: 131072,
+      reasoningParameters: false,
+      sendMaxTokens: false,
+      enableStreaming: true,
+      customHeaders: [],
+    },
+    {
+      id: 'deepseek',
+      name: 'deepseek',
+      provider: 'openrouter',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      model: 'openrouter::deepseek/deepseek-chat-v3.1',
+      supportsImages: false,
+      supportsPromptCaching: false,
+      inputPrice: 0,
+      outputPrice: 0,
+      maxTokens: -1,
+      contextWindow: 128000,
+      reasoningParameters: false,
+      sendMaxTokens: false,
+      enableStreaming: true,
+      customHeaders: [],
+    },
+    {
+      id: 'vision',
+      name: 'vision',
+      provider: 'google',
+      baseUrl: 'https://generativelanguage.googleapis.com',
+      model: 'google::gemini-2.0-flash',
+      supportsImages: true,
+      supportsPromptCaching: false,
+      inputPrice: 0,
+      outputPrice: 0,
+      maxTokens: -1,
+      contextWindow: 1048576,
+      reasoningParameters: false,
+      sendMaxTokens: false,
+      enableStreaming: true,
+      customHeaders: [],
+    },
+  ],
+  activeProfileId: 'llama-3.3-70b',
+  indexing: {
+    indexingEnabled: true,
+    searchScoreThreshold: 0.3,
+    maximumSearchResults: 50,
+    embeddingBatchSize: 200,
+    scannerMaxBatchRetries: 5,
+  },
+};
+
 function matchesAllowlist(command: string, patterns: string[]): boolean {
   for (const pattern of patterns) {
     if (pattern === command) { return true; }
@@ -75,6 +192,7 @@ function extractPattern(command: string): string {
 
 export class WebviewBridge {
   private webviewView: vscode.WebviewView | undefined;
+  private webviewPanel: vscode.WebviewPanel | undefined;
   private indexer: WorkspaceIndexer;
   private contextAssembler: OldContextAssembler;
   private diagnosticsWatcher: DiagnosticsWatcher;
@@ -158,6 +276,23 @@ export class WebviewBridge {
     }
   }
 
+  setWebviewPanel(webviewPanel: vscode.WebviewPanel): void {
+    this.webviewPanel = webviewPanel;
+    webviewPanel.webview.onDidReceiveMessage((message: WebviewToExtensionMessage) => {
+      this.handleMessage(message);
+    });
+
+    if (this.puterToken) {
+      this.postMessage({ type: 'puterToken', token: this.puterToken });
+    }
+  }
+
+  clearWebviewPanel(webviewPanel?: vscode.WebviewPanel): void {
+    if (!webviewPanel || this.webviewPanel === webviewPanel) {
+      this.webviewPanel = undefined;
+    }
+  }
+
   setPuterToken(token: string): void {
     this.puterToken = token;
     // If webview is already loaded, send token immediately
@@ -169,6 +304,7 @@ export class WebviewBridge {
 
   postMessage(message: ExtensionToWebviewMessage): void {
     this.webviewView?.webview.postMessage(message);
+    this.webviewPanel?.webview.postMessage(message);
   }
 
   private async handleMessage(message: WebviewToExtensionMessage): Promise<void> {
@@ -197,7 +333,12 @@ export class WebviewBridge {
       case 'openExternal':
         console.log('[Andor] Handling openExternal:', message.url);
         if (message.url) {
-          vscode.env.openExternal(vscode.Uri.parse(message.url));
+          const targetUri = vscode.Uri.parse(message.url);
+          if (targetUri.scheme === 'command') {
+            await vscode.commands.executeCommand(targetUri.path || targetUri.fsPath || message.url.replace(/^command:/, ''));
+          } else {
+            vscode.env.openExternal(targetUri);
+          }
         }
         break;
       case 'startPuterAuth':
@@ -307,9 +448,31 @@ export class WebviewBridge {
       case 'getIndexedFiles':
         await this.handleGetIndexedFiles();
         break;
+      case 'getSettingsState':
+        this.handleGetSettingsState();
+        break;
+      case 'saveSettingsState':
+        await this.handleSaveSettingsState(message);
+        break;
       default:
         console.log('[Andor] Unknown message type:', message.type);
     }
+  }
+
+  private getSettingsState(): SettingsState {
+    return this.context.globalState.get<SettingsState>(SETTINGS_STATE_KEY, DEFAULT_SETTINGS_STATE);
+  }
+
+  private handleGetSettingsState(): void {
+    this.postMessage({ type: 'settingsState', settingsState: this.getSettingsState() });
+  }
+
+  private async handleSaveSettingsState(message: WebviewToExtensionMessage): Promise<void> {
+    if (!message.settingsState) {
+      return;
+    }
+    await this.context.globalState.update(SETTINGS_STATE_KEY, message.settingsState);
+    this.postMessage({ type: 'settingsState', settingsState: this.getSettingsState() });
   }
 
   private handleGetIndexingStatus(): void {
@@ -552,27 +715,23 @@ Original message: "${text}"
 
 Return ONLY the improved prompt, nothing else.`;
 
-    // Use the model the user currently has selected
     const modelToUse = message.model || await this.findFastModel();
+    const targetPost = (payload: { type: 'improvedPrompt'; text: string }) => {
+      this.postMessage(payload);
+    };
 
     try {
-      let improved = '';
-      await this.providerRegistry.streamCall(
+      const response = await this.providerRegistry.call(
         [{ role: 'user', content: improveSystemPrompt }],
         modelToUse,
-        {
-          onChunk: (chunk: string) => { improved += chunk; },
-          onDone: () => {
-            this.webviewView?.webview.postMessage({
-              type: 'improvedPrompt',
-              text: improved.trim(),
-            });
-          },
-          onError: (err: string) => {
-            console.error('[Andor] Improve prompt failed:', err);
-          },
-        },
       );
+      const improved = response.content.trim();
+      if (improved) {
+        targetPost({
+          type: 'improvedPrompt',
+          text: improved,
+        });
+      }
     } catch (err) {
       console.error('[Andor] Improve prompt error:', err);
     }
@@ -1028,6 +1187,37 @@ Return ONLY the improved prompt, nothing else.`;
     this.postMessage({ type: 'providerTestResult', providerId, success });
   }
 
+  private async mapProviderModels(provider: AIProvider, models: ProviderModel[]): Promise<ModelInfo[]> {
+    return models.map((m) => ({
+      id: m.id,
+      name: m.name,
+      providerId: provider.id,
+      providerName: provider.name,
+      contextWindow: m.contextWindow,
+      free: m.free,
+      bestFor: m.bestFor,
+      tier: m.tier,
+      modelSpec: `${provider.id}::${m.id}`,
+    }));
+  }
+
+  private async refreshProviderModels(provider: AIProvider): Promise<ProviderModel[]> {
+    if (!provider.refreshModels) {
+      return provider.getModels();
+    }
+    const apiKey = provider.id === 'puter' ? 'puter' : await this.providerRegistry.getApiKey(provider.id);
+    try {
+      const refreshed = await provider.refreshModels(apiKey);
+      if (refreshed.length > 0) {
+        return refreshed;
+      }
+      return provider.getModels();
+    } catch (err) {
+      console.error(`[Andor] Failed to refresh models for ${provider.id}:`, err);
+      return provider.getModels();
+    }
+  }
+
   private async handleGetModels(message: WebviewToExtensionMessage): Promise<void> {
     const { providerId } = message;
     let models: ModelInfo[];
@@ -1038,28 +1228,19 @@ Return ONLY the improved prompt, nothing else.`;
         this.postMessage({ type: 'error', error: `Unknown provider: ${providerId}` });
         return;
       }
-      models = provider.getModels().map(m => ({
-        id: m.id,
-        name: m.name,
-        providerId: provider.id,
-        providerName: provider.name,
-        contextWindow: m.contextWindow,
-        free: m.free,
-        bestFor: m.bestFor,
-        tier: m.tier,
-      }));
+      const refreshedModels = await this.refreshProviderModels(provider);
+      models = await this.mapProviderModels(provider, refreshedModels);
     } else {
-      const allModels = this.providerRegistry.getAllModels();
-      models = allModels.map(({ provider, model }) => ({
-        id: model.id,
-        name: model.name,
-        providerId: provider.id,
-        providerName: provider.name,
-        contextWindow: model.contextWindow,
-        free: model.free,
-        bestFor: model.bestFor,
-        tier: model.tier,
+      const providers = this.providerRegistry.getAllProviders();
+      const refreshedGroups = await Promise.all(providers.map(async (provider) => {
+        const providerModels = await this.refreshProviderModels(provider);
+        return this.mapProviderModels(provider, providerModels);
       }));
+      models = refreshedGroups.flat();
+      if (models.length === 0) {
+        const fallbackGroups = providers.map((provider) => this.mapProviderModels(provider, provider.getModels()));
+        models = (await Promise.all(fallbackGroups)).flat();
+      }
     }
 
     this.postMessage({ type: 'models', models });

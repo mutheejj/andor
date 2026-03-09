@@ -193,4 +193,13 @@ export class OpenRouterProvider implements AIProvider {
       return OPENROUTER_DEFAULT_MODELS;
     }
   }
+
+  async refreshModels(apiKey?: string): Promise<ProviderModel[]> {
+    if (!apiKey) {
+      this.dynamicModels = OPENROUTER_DEFAULT_MODELS;
+      this.dynamicModelsFetchedAt = Date.now();
+      return this.dynamicModels;
+    }
+    return this.fetchDynamicModels(apiKey);
+  }
 }

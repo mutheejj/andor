@@ -23,6 +23,7 @@ export interface AIProvider {
   streamCall(messages: AIMessage[], model: string, apiKey: string, callbacks: AIStreamCallbacks): Promise<void>;
   testConnection(apiKey: string): Promise<boolean>;
   getModels(): ProviderModel[];
+  refreshModels?(apiKey?: string): Promise<ProviderModel[]>;
 }
 
 export interface ProviderModel {

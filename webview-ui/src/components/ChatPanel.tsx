@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { Wand2, AtSign, Paperclip, Mic, Send, Globe, Zap, FolderOpen, FileImage, AlertTriangle, TerminalSquare, GitCommitHorizontal, Link2, Files } from 'lucide-react';
 import { CodeBlock } from './CodeBlock';
 import { DiffViewer } from './DiffViewer';
 import { ImageUploader } from './ImageUploader';
@@ -16,7 +17,7 @@ import type { SearchResult } from './WebSearchResults';
 import { PromptImprover } from './PromptImprover';
 import { AgentDashboard } from './AgentDashboard';
 import type { AgentDashboardState } from './AgentDashboard';
-import type { ChatMode } from './ModeSelector';
+import type { ChatMode, AgentModeId } from './ModeSelector';
 import { streamChat } from '../lib/puter';
 import type { ChatMessage, ContextFileInfo, PostMessageFn } from '../App';
 
@@ -35,6 +36,7 @@ interface ChatPanelProps {
   pendingCommandApproval: CommandApprovalRequest | null;
   onDismissCommandApproval: () => void;
   chatMode: ChatMode;
+  selectedAgentMode: AgentModeId;
   thinkingMode: boolean;
 }
 
@@ -51,6 +53,13 @@ interface ParsedBlock {
   content: string;
   language?: string;
   filePath?: string;
+}
+
+interface ContextActionItem {
+  id: string;
+  label: string;
+  icon: React.ReactNode;
+  action: () => void;
 }
 
 function parseMessageContent(content: string): ParsedBlock[] {
@@ -305,6 +314,7 @@ export function ChatPanel({
   pendingCommandApproval,
   onDismissCommandApproval,
   chatMode,
+  selectedAgentMode,
   thinkingMode,
 }: ChatPanelProps) {
   const [inputText, setInputText] = useState('');
@@ -321,11 +331,14 @@ export function ChatPanel({
   const [webSearchResults, setWebSearchResults] = useState<SearchResult[]>([]);
   const [webSearchQuery, setWebSearchQuery] = useState('');
   const [agentDashboard, setAgentDashboard] = useState<AgentDashboardState | null>(null);
+  const [showContextMenu, setShowContextMenu] = useState(false);
+  const [yoloMode, setYoloMode] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const editTextareaRef = useRef<HTMLTextAreaElement>(null);
   const pendingChatRef = useRef<{ userText: string; images: string[] } | null>(null);
   const messagesRef = useRef<ChatMessage[]>(messages);
+  const imageUploaderTriggerRef = useRef<(() => void) | null>(null);
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -507,11 +520,26 @@ export function ChatPanel({
 
   // Build mode prefix for system prompt
   const getModePrefix = useCallback(() => {
+    if (selectedAgentMode === 'architect') {
+      return '\n\n[ARCHITECT MODE] Focus on planning, scoping, sequencing, and design tradeoffs before implementation. Do NOT write files or run commands unless the user explicitly asks to switch into an implementation-oriented mode.\n';
+    }
+    if (selectedAgentMode === 'ask') {
+      return '\n\n[ASK MODE] Give direct answers, explanations, comparisons, and guidance. Stay conversational and do NOT make codebase changes.\n';
+    }
+    if (selectedAgentMode === 'review') {
+      return '\n\n[REVIEW MODE] Review code, identify risks, point out bugs, edge cases, and improvement opportunities. Prefer analysis over direct modification.\n';
+    }
+    if (selectedAgentMode === 'debug') {
+      return '\n\n[DEBUG MODE] Diagnose the root cause first, explain the failure clearly, then apply the smallest safe fix. You may edit files and run commands if needed.\n';
+    }
+    if (selectedAgentMode === 'orchestrator') {
+      return '\n\n[ORCHESTRATOR MODE] Break the request into ordered subtasks, coordinate tools carefully, and keep the user updated on progress. You may edit files and run commands when justified.\n';
+    }
     if (chatMode === 'chat') {
       return '\n\n[CHAT MODE] You are in chat-only mode. Do NOT write files, run commands, or make any edits. Only answer questions, explain code, discuss approaches, and provide guidance. If the user asks you to make changes, explain what you would do but do not output write: or run blocks.\n';
     }
-    return '\n\n[AGENT MODE] You are in agent mode. You can read files, write files, run terminal commands, and make edits to the codebase. Use ```write:filepath and ```run blocks to take actions.\n';
-  }, [chatMode]);
+    return '\n\n[CODE MODE] You are in implementation mode. You can read files, write files, run terminal commands, and make edits to the codebase. Use ```write:filepath and ```run blocks to take actions when appropriate.\n';
+  }, [chatMode, selectedAgentMode]);
 
   const sendMessage = useCallback((text: string, images: string[]) => {
     onCreateCheckpoint(messagesRef.current, text.slice(0, 60));
@@ -652,6 +680,76 @@ export function ChatPanel({
     if (!text) return;
     postMessage({ type: 'webSearch', text });
   }, [inputText, postMessage]);
+
+  const openFilePicker = useCallback(() => {
+    setFilePickerMode('button');
+    setFilePickerQuery('');
+    setShowFilePicker(true);
+    setShowContextMenu(false);
+    if (!projectFiles.length) {
+      postMessage({ type: 'listProjectFiles' });
+    }
+  }, [projectFiles.length, postMessage]);
+
+  const contextActions: ContextActionItem[] = [
+    {
+      id: 'problems',
+      label: 'Problems',
+      icon: <AlertTriangle size={14} />,
+      action: () => {
+        setInputText((prev) => `${prev}${prev ? '\n' : ''}@problems `);
+        setShowContextMenu(false);
+      },
+    },
+    {
+      id: 'terminal',
+      label: 'Terminal',
+      icon: <TerminalSquare size={14} />,
+      action: () => {
+        setInputText((prev) => `${prev}${prev ? '\n' : ''}@terminal `);
+        setShowContextMenu(false);
+      },
+    },
+    {
+      id: 'url',
+      label: 'Paste URL to fetch contents',
+      icon: <Link2 size={14} />,
+      action: () => {
+        setInputText((prev) => `${prev}${prev ? '\n' : ''}@url `);
+        setShowContextMenu(false);
+      },
+    },
+    {
+      id: 'folder',
+      label: 'Add Folder',
+      icon: <FolderOpen size={14} />,
+      action: openFilePicker,
+    },
+    {
+      id: 'file',
+      label: 'Add File',
+      icon: <Files size={14} />,
+      action: openFilePicker,
+    },
+    {
+      id: 'image',
+      label: 'Add Image',
+      icon: <FileImage size={14} />,
+      action: () => {
+        imageUploaderTriggerRef.current?.();
+        setShowContextMenu(false);
+      },
+    },
+    {
+      id: 'git',
+      label: 'Git Commits',
+      icon: <GitCommitHorizontal size={14} />,
+      action: () => {
+        setInputText((prev) => `${prev}${prev ? '\n' : ''}@git `);
+        setShowContextMenu(false);
+      },
+    },
+  ];
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     // Don't handle Enter/etc when file picker is open (it handles them)
@@ -936,7 +1034,7 @@ export function ChatPanel({
               </div>
             )}
 
-            <ImageUploader images={uploadedImages} onImagesChange={setUploadedImages} />
+            <ImageUploader images={uploadedImages} onImagesChange={setUploadedImages} onReadyTrigger={(trigger) => { imageUploaderTriggerRef.current = trigger; }} />
 
             {/* File picker popup */}
             {showFilePicker && (
@@ -963,82 +1061,150 @@ export function ChatPanel({
               </div>
             )}
 
-            <div className="flex gap-1.5 mt-1 items-end">
-              {/* Add files button */}
-              <button
-                onClick={() => {
-                  setFilePickerMode('button');
-                  setFilePickerQuery('');
-                  setShowFilePicker(v => !v);
-                  if (!projectFiles.length) {
-                    postMessage({ type: 'listProjectFiles' });
-                  }
-                }}
-                className="px-2 py-2 rounded text-sm transition-opacity hover:opacity-100 opacity-60 flex-shrink-0"
-                style={{
-                  backgroundColor: 'var(--vscode-input-background)',
-                  color: 'var(--vscode-foreground)',
-                  border: '1px solid var(--vscode-input-border, var(--vscode-panel-border))',
-                }}
-                title="Add files or folders (or type / in chat)"
-              >
-                📎
-              </button>
-              {/* Web search button */}
-              <button
-                onClick={handleWebSearch}
-                disabled={!inputText.trim()}
-                className="px-2 py-2 rounded text-sm transition-opacity hover:opacity-100 opacity-60 disabled:opacity-20 flex-shrink-0"
-                style={{
-                  backgroundColor: 'var(--vscode-input-background)',
-                  color: 'var(--vscode-foreground)',
-                  border: '1px solid var(--vscode-input-border, var(--vscode-panel-border))',
-                }}
-                title="Search the web for current input text"
-              >
-                🔍
-              </button>
-              {/* Prompt improver button */}
-              <PromptImprover
-                inputText={inputText}
-                onImproved={(text) => setInputText(text)}
-                postMessage={postMessage}
-                selectedModel={selectedModel}
-                disabled={isLoading}
-              />
+            <div
+              className="mt-1 rounded-xl px-3 py-3"
+              style={{
+                background: 'linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01))',
+                border: '1px solid var(--vscode-panel-border)',
+              }}
+            >
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px]"
+                    style={{ background: 'var(--vscode-input-background)', border: '1px solid var(--vscode-panel-border)' }}>
+                    <span className="opacity-60">⌃</span>
+                    <span>{selectedAgentMode}</span>
+                  </span>
+                  <span className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px]"
+                    style={{ background: 'var(--vscode-input-background)', border: '1px solid var(--vscode-panel-border)' }}>
+                    <span className="opacity-60">◌</span>
+                    <span className="max-w-[180px] truncate">{selectedModel}</span>
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <PromptImprover
+                    inputText={inputText}
+                    onImproved={(text) => setInputText(text)}
+                    postMessage={postMessage}
+                    selectedModel={selectedModel}
+                    disabled={isLoading}
+                  />
+                </div>
+              </div>
+
               <textarea
                 ref={textareaRef}
                 value={inputText}
                 onChange={handleInputChange}
                 onKeyDown={handleKeyDown}
-                placeholder={isLoading ? 'Andor is working...' : 'Ask anything... (type / to add files)'}
+                placeholder={isLoading ? 'Andor is working...' : 'Type a message...'}
                 rows={1}
-                className="flex-1 resize-none rounded px-2.5 py-2 text-sm outline-none"
+                className="w-full resize-none bg-transparent text-sm outline-none"
                 style={{
-                  backgroundColor: 'var(--vscode-input-background)',
                   color: 'var(--vscode-input-foreground)',
-                  border: '1px solid var(--vscode-input-border, var(--vscode-panel-border))',
-                  lineHeight: '1.4',
+                  lineHeight: '1.5',
+                  minHeight: '84px',
                 }}
                 disabled={isLoading}
               />
-              <button
-                onClick={handleSend}
-                disabled={isLoading || !inputText.trim()}
-                className="px-3 py-2 rounded text-sm font-medium transition-all disabled:opacity-30 flex-shrink-0"
-                style={{
-                  backgroundColor: 'var(--vscode-button-background)',
-                  color: 'var(--vscode-button-foreground)',
-                  minWidth: '36px',
-                }}
-                title="Send (Enter)"
-              >
-                {isLoading ? (
-                  <span className="inline-block w-3 h-3 border border-current border-t-transparent rounded-full animate-spin" />
-                ) : '↑'}
-              </button>
+
+              <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center gap-2 relative">
+                  <button
+                    onClick={() => setShowContextMenu((value) => !value)}
+                    className="inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-[11px] opacity-80 hover:opacity-100"
+                    style={{ background: 'var(--vscode-input-background)', border: '1px solid var(--vscode-panel-border)' }}
+                    title="Add context"
+                  >
+                    <AtSign size={14} />
+                  </button>
+
+                  {showContextMenu && (
+                    <div
+                      className="absolute bottom-full left-0 mb-2 min-w-[260px] overflow-hidden rounded-md shadow-lg z-50"
+                      style={{
+                        background: 'var(--vscode-dropdown-background, var(--vscode-input-background))',
+                        border: '1px solid var(--vscode-panel-border)',
+                      }}
+                    >
+                      {contextActions.map((item) => (
+                        <button
+                          key={item.id}
+                          onClick={item.action}
+                          className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs hover:opacity-90"
+                          style={{ color: 'var(--vscode-foreground)' }}
+                        >
+                          <span className="opacity-75">{item.icon}</span>
+                          <span>{item.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  <button
+                    onClick={() => imageUploaderTriggerRef.current?.()}
+                    className="inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-[11px] opacity-80 hover:opacity-100"
+                    style={{ background: 'var(--vscode-input-background)', border: '1px solid var(--vscode-panel-border)' }}
+                    title="Add image"
+                  >
+                    <Paperclip size={14} />
+                  </button>
+
+                  <button
+                    onClick={handleWebSearch}
+                    disabled={!inputText.trim()}
+                    className="inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-[11px] opacity-80 hover:opacity-100 disabled:opacity-30"
+                    style={{ background: 'var(--vscode-input-background)', border: '1px solid var(--vscode-panel-border)' }}
+                    title="Search web"
+                  >
+                    <Globe size={14} />
+                  </button>
+
+                  <button
+                    className="inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-[11px] opacity-40"
+                    style={{ background: 'var(--vscode-input-background)', border: '1px solid var(--vscode-panel-border)' }}
+                    title="Voice input coming soon"
+                  >
+                    <Mic size={14} />
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setYoloMode((value) => !value)}
+                    className="inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-[11px] transition-colors"
+                    style={{
+                      background: yoloMode ? 'rgba(255, 193, 7, 0.18)' : 'var(--vscode-input-background)',
+                      border: yoloMode ? '1px solid rgba(255, 193, 7, 0.55)' : '1px solid var(--vscode-panel-border)',
+                      color: yoloMode ? '#f2c94c' : 'var(--vscode-foreground)',
+                    }}
+                    title="YOLO mode"
+                  >
+                    <Zap size={14} />
+                    <span>{yoloMode ? 'YOLO' : 'Safe'}</span>
+                  </button>
+
+                  <button
+                    onClick={handleSend}
+                    disabled={isLoading || !inputText.trim()}
+                    className="inline-flex items-center justify-center rounded-md px-3 py-2 text-sm font-medium transition-all disabled:opacity-30"
+                    style={{
+                      backgroundColor: 'var(--vscode-button-background)',
+                      color: 'var(--vscode-button-foreground)',
+                      minWidth: '40px',
+                    }}
+                    title="Send (Enter)"
+                  >
+                    {isLoading ? (
+                      <span className="inline-block w-3 h-3 border border-current border-t-transparent rounded-full animate-spin" />
+                    ) : (
+                      <Send size={15} />
+                    )}
+                  </button>
+                </div>
+              </div>
             </div>
-            <div className="text-[9px] opacity-30 mt-1 px-0.5">Enter to send · Shift+Enter for newline · / to add files</div>
+            <div className="text-[9px] opacity-30 mt-1 px-0.5">@ to add context · Enter to send · Shift+Enter for newline · YOLO mode is UI-only for now</div>
           </div>
 
           <style>{`

@@ -37,6 +37,8 @@
 - **Full Workspace Awareness** — AI sees your complete file tree (grouped by directory)
 - **Diagnostics Integration** — Real-time errors and warnings in context
 - **Multi-file Coordination** — AI understands dependencies and updates all affected files
+- **Senior-Agent Execution** — Agents now reason in a structured workflow with analysis, plan, execution, verification, blockers, and completion states
+- **Better Orchestration** — Complex requests can be decomposed into higher-quality sub-tasks with clearer verification and blocker reporting
 
 ### Advanced Settings Panel
 - **Memory Management** — Learned patterns and project context
@@ -173,6 +175,13 @@ Andor will:
 - **Context Assembler**: Intelligent file scoring and selection
 - **Provider Registry**: Multi-provider model management with fallback
 
+### Agent Execution Model
+
+- **Structured responses**: internal agents are guided to produce `Analysis`, `Plan`, `Execution`, `Verification`, `Blockers`, and `Completion`
+- **Completion states**: work is explicitly marked as `COMPLETE`, `INCOMPLETE`, or `BLOCKED`
+- **Improved planning**: the orchestrator uses stronger complexity detection and creates more disciplined research/debug/test/review task splits
+- **Verification-first output**: multi-agent runs now summarize execution status, verification notes, and blockers instead of returning loosely combined text
+
 ---
 
 ## Configuration
@@ -216,6 +225,21 @@ We welcome contributors! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 - **Language Support**: Better parsing for Python, Go, Rust, etc.
 - **Testing**: Unit and integration tests
 - **Documentation**: Guides, examples, tutorials
+
+### Packaging & Publishing
+
+```bash
+# Build the webview
+npm run build:webview
+
+# Compile the extension
+npm run compile
+
+# Create a production bundle
+npm run package
+```
+
+To publish to the VS Code Marketplace, use `vsce publish` after authenticating with your publisher credentials or Personal Access Token.
 
 ---
 

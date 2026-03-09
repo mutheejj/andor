@@ -1,12 +1,15 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { ChatPanel } from './components/ChatPanel';
+import { Header } from './components/Header';
+import { AgentManagerView } from './components/AgentManagerView';
+import { HistoryView } from './components/HistoryView';
 import { ModelSelector } from './components/ModelSelector';
 import type { ModelInfo } from './components/ModelSelector';
 import { AdvancedSettings } from './components/AdvancedSettings';
 import { IndexingStatusBar } from './components/IndexingStatusBar';
 import type { IndexingStatus } from './components/IndexingStatusBar';
 import { ModeSelector } from './components/ModeSelector';
-import type { ChatMode } from './components/ModeSelector';
+import type { ChatMode, AgentModeId } from './components/ModeSelector';
 import type { FileSearchResult } from './components/MentionSearch';
 import { getAuthToken, setAuthToken, getUser, signOut } from './lib/puter';
 import type { CommandApprovalRequest } from './components/CommandApproval';
@@ -18,10 +21,15 @@ declare global {
       getState: () => unknown;
       setState: (state: unknown) => void;
     };
+    __andorView?: 'sidebar' | 'agent-manager';
   }
 }
 
 const vscode = typeof window !== 'undefined' ? window.__vscode ?? null : null;
+
+function getModelValue(model: ModelInfo): string {
+  return model.modelSpec || `${model.providerId}::${model.id}`;
+}
 
 export interface ChatMessage {
   id: string;
@@ -53,7 +61,10 @@ export type PostMessageFn = (message: unknown) => void;
 
 const MAX_PERSISTED_MESSAGES = 50;
 
+type AppView = 'chat' | 'agent-manager' | 'history' | 'profile';
+
 export default function App() {
+  const hostView = window.__andorView || 'sidebar';
   const [selectedModel, setSelectedModel] = useState('claude-sonnet-4');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([]);
@@ -63,6 +74,7 @@ export default function App() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [showCheckpoints, setShowCheckpoints] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [activeView, setActiveView] = useState<AppView>(hostView === 'agent-manager' ? 'agent-manager' : 'chat');
   const [allModels, setAllModels] = useState<ModelInfo[]>([]);
   const [pendingCommandApproval, setPendingCommandApproval] = useState<CommandApprovalRequest | null>(null);
   const [indexingStatus, setIndexingStatus] = useState<IndexingStatus>({
@@ -70,6 +82,7 @@ export default function App() {
   });
   const [fileSearchResults, setFileSearchResults] = useState<FileSearchResult[]>([]);
   const [chatMode, setChatMode] = useState<ChatMode>('agent');
+  const [selectedAgentMode, setSelectedAgentMode] = useState<AgentModeId>('code');
   const [thinkingMode, setThinkingMode] = useState(false);
   const [showMemory, setShowMemory] = useState(false);
   const [projectMemory, setProjectMemory] = useState<unknown>(null);
@@ -137,6 +150,20 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (allModels.length === 0) {
+      return;
+    }
+    const hasSelectedModel = allModels.some((model) => getModelValue(model) === selectedModel || model.id === selectedModel);
+    if (hasSelectedModel) {
+      return;
+    }
+    const preferredModel = allModels[0];
+    if (preferredModel) {
+      setSelectedModel(getModelValue(preferredModel));
+    }
+  }, [allModels, selectedModel]);
+
+  useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
       const msg = event.data;
       switch (msg.type) {
@@ -164,7 +191,7 @@ export default function App() {
           break;
         case 'models':
           if (msg.models && Array.isArray(msg.models)) {
-            setAllModels(msg.models);
+            setAllModels((current) => msg.models.length > 0 ? msg.models : current);
           }
           break;
         case 'terminalResult':
@@ -331,6 +358,7 @@ export default function App() {
     setContextFiles([]);
     setIsLoading(false);
     setCheckpoints([]);
+    setActiveView('chat');
     postMessage({ type: 'clearHistory' });
   }, [postMessage]);
 
@@ -349,7 +377,7 @@ export default function App() {
 
   // Check if the selected model is a Puter model (handled by webview)
   const isPuterModel = useCallback((modelId: string): boolean => {
-    const model = allModels.find(m => m.id === modelId);
+    const model = allModels.find(m => getModelValue(m) === modelId || m.id === modelId);
     if (!model) { return true; } // Default to Puter for unknown models
     return model.providerId === 'puter';
   }, [allModels]);
@@ -359,7 +387,14 @@ export default function App() {
       <div className="flex flex-col h-screen overflow-hidden" style={{ background: 'var(--vscode-sideBar-background)', color: 'var(--vscode-sideBar-foreground)' }}>
         <AdvancedSettings
           postMessage={postMessage}
-          onClose={() => { setShowSettings(false); setShowMemory(false); postMessage({ type: 'getModels' }); }}
+          onClose={() => {
+            setShowSettings(false);
+            setShowMemory(false);
+            if (hostView === 'agent-manager') {
+              setActiveView('agent-manager');
+            }
+            postMessage({ type: 'getModels' });
+          }}
           memory={projectMemory}
           indexingStatus={indexingStatus}
         />
@@ -367,136 +402,151 @@ export default function App() {
     );
   }
 
+  const renderMainView = () => {
+    if (activeView === 'agent-manager') {
+      return (
+        <AgentManagerView
+          messages={messages}
+          onBackToChat={() => setActiveView('chat')}
+          onSubmitTask={(text) => {
+            const userMessage: ChatMessage = {
+              id: crypto.randomUUID(),
+              role: 'user',
+              content: text,
+              timestamp: Date.now(),
+              contextFiles: contextFiles.map((file) => file.relativePath),
+            };
+
+            setMessages((prev) => [...prev, userMessage, {
+              id: crypto.randomUUID(),
+              role: 'assistant',
+              content: '',
+              timestamp: Date.now(),
+              model: selectedModel,
+              isStreaming: true,
+            }]);
+            setIsLoading(true);
+
+            const history = messages
+              .filter((message) => !message.isStreaming)
+              .slice(-6)
+              .map((message) => ({ role: message.role, content: message.content }));
+
+            postMessage({
+              type: 'streamWithProvider',
+              text,
+              model: selectedModel,
+              history,
+            });
+          }}
+          isLoading={isLoading}
+        />
+      );
+    }
+
+    if (activeView === 'history') {
+      return <HistoryView checkpoints={checkpoints} onBack={() => setActiveView('chat')} onSelect={revertToCheckpoint} />;
+    }
+
+    if (activeView === 'profile') {
+      return (
+        <div className="flex h-full items-center justify-center px-6" style={{ background: 'var(--vscode-sideBar-background)' }}>
+          <div className="max-w-md rounded-2xl p-6 text-center" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid var(--vscode-panel-border)' }}>
+            <div className="mb-2 text-lg font-semibold">Profile</div>
+            <div className="text-sm opacity-65">
+              Profile management UI is queued next. Your auth state is still active in the chat experience.
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <>
+        {/* Model selector */}
+        <div className="px-3 py-1.5 flex-shrink-0" style={{ borderBottom: '1px solid var(--vscode-panel-border)' }}>
+          <ModelSelector selected={selectedModel} onChange={setSelectedModel} models={allModels} />
+        </div>
+
+        {/* Mode selector: Chat vs Agent + Thinking toggle */}
+        <ModeSelector
+          mode={chatMode}
+          onChange={setChatMode}
+          thinking={thinkingMode}
+          onThinkingChange={setThinkingMode}
+          selectedAgentMode={selectedAgentMode}
+          onAgentModeChange={setSelectedAgentMode}
+        />
+
+        {/* Indexing status bar */}
+        <IndexingStatusBar
+          status={indexingStatus}
+          onRefresh={() => postMessage({ type: 'getIndexingStatus' })}
+        />
+
+        {/* Checkpoint panel */}
+        {showCheckpoints && (
+          <div className="flex-shrink-0 px-3 py-2 overflow-y-auto max-h-40" style={{ borderBottom: '1px solid var(--vscode-panel-border)', background: 'var(--vscode-input-background)' }}>
+            <div className="text-[10px] font-semibold opacity-60 mb-1.5">Checkpoints — click to revert</div>
+            <div className="space-y-1">
+              {[...checkpoints].reverse().map(cp => (
+                <button
+                  key={cp.id}
+                  onClick={() => revertToCheckpoint(cp.id)}
+                  className="w-full text-left text-[10px] px-2 py-1.5 rounded hover:opacity-90"
+                  style={{ background: 'var(--vscode-button-secondaryBackground, #3a3a3a)', color: 'var(--vscode-foreground)' }}
+                >
+                  <span className="opacity-50">{new Date(cp.timestamp).toLocaleTimeString()} · </span>
+                  <span>{cp.label}</span>
+                  <span className="opacity-40 ml-1">({cp.messages.length} msgs)</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="flex-1 min-h-0 overflow-hidden">
+          <ChatPanel
+            messages={messages}
+            setMessages={setMessages}
+            contextFiles={contextFiles}
+            isLoading={isLoading}
+            setIsLoading={setIsLoading}
+            selectedModel={selectedModel}
+            postMessage={postMessage}
+            pendingSystemPromptRef={pendingSystemPromptRef}
+            onCreateCheckpoint={createCheckpoint}
+            isPuterModel={isPuterModel}
+            streamingAssistantIdRef={streamingAssistantIdRef}
+            pendingCommandApproval={pendingCommandApproval}
+            onDismissCommandApproval={() => setPendingCommandApproval(null)}
+            chatMode={chatMode}
+            selectedAgentMode={selectedAgentMode}
+            thinkingMode={thinkingMode}
+          />
+        </div>
+      </>
+    );
+  };
+
   return (
     <div className="flex flex-col h-screen overflow-hidden" style={{ background: 'var(--vscode-sideBar-background)', color: 'var(--vscode-sideBar-foreground)' }}>
-      {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2 flex-shrink-0" style={{ borderBottom: '1px solid var(--vscode-panel-border)', minHeight: '44px' }}>
-        <div className="flex items-center gap-2">
-          <div className="w-6 h-6 rounded-md flex items-center justify-center text-[12px]" style={{ background: 'var(--vscode-button-background)', color: 'var(--vscode-button-foreground)' }}>
-            ⬡
-          </div>
-          <span className="text-sm font-bold tracking-wide" style={{ color: 'var(--vscode-foreground)' }}>Andor</span>
-          {authStatus.signedIn && authStatus.username && (
-            <span className="text-[10px] px-1.5 py-0.5 rounded-full opacity-60" style={{ background: 'var(--vscode-badge-background)', color: 'var(--vscode-badge-foreground)' }}>
-              {authStatus.username}
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-1">
-          {authError && (
-            <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'var(--vscode-inputValidation-errorBackground, #5a1d1d)', color: 'var(--vscode-inputValidation-errorForeground, #f48771)' }} title={authError}>⚠</span>
-          )}
-          {checkpoints.length > 0 && (
-            <button
-              onClick={() => setShowCheckpoints(v => !v)}
-              className="text-[10px] px-2 py-1 rounded transition-opacity hover:opacity-100 opacity-70"
-              style={{ background: 'var(--vscode-input-background)', color: 'var(--vscode-foreground)' }}
-              title="View checkpoints / revert"
-            >
-              ↩ {checkpoints.length}
-            </button>
-          )}
-          <button
-            onClick={handleClearHistory}
-            className="text-[10px] px-2 py-1 rounded transition-opacity hover:opacity-100 opacity-80"
-            style={{ background: 'var(--vscode-button-background)', color: 'var(--vscode-button-foreground)' }}
-            title="New Chat"
-          >
-            + New
-          </button>
-          <button
-            onClick={() => { setShowMemory(true); postMessage({ type: 'getMemory' }); }}
-            className="text-[10px] px-2 py-1 rounded transition-opacity hover:opacity-100 opacity-70"
-            style={{ background: 'var(--vscode-input-background)', color: 'var(--vscode-foreground)' }}
-            title="Memory & learned context"
-          >
-            🧠
-          </button>
-          <button
-            onClick={() => setShowSettings(true)}
-            className="text-[10px] px-2 py-1 rounded transition-opacity hover:opacity-100 opacity-70"
-            style={{ background: 'var(--vscode-input-background)', color: 'var(--vscode-foreground)' }}
-            title="Settings"
-          >
-            ⚙
-          </button>
-          {authStatus.signedIn ? (
-            <button
-              onClick={handleSignOut}
-              className="text-[10px] px-2 py-1 rounded opacity-70 hover:opacity-100"
-              style={{ background: 'var(--vscode-input-background)', color: 'var(--vscode-foreground)' }}
-              title={`Sign out (${authStatus.username || ''})`}
-            >
-              Sign out
-            </button>
-          ) : (
-            <button
-              onClick={handleSignIn}
-              className="text-[10px] px-2 py-1 rounded transition-opacity hover:opacity-100 opacity-90"
-              style={{ background: 'var(--vscode-button-background)', color: 'var(--vscode-button-foreground)' }}
-              title="Sign in with Puter"
-            >
-              Sign in
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Model selector */}
-      <div className="px-3 py-1.5 flex-shrink-0" style={{ borderBottom: '1px solid var(--vscode-panel-border)' }}>
-        <ModelSelector selected={selectedModel} onChange={setSelectedModel} models={allModels} />
-      </div>
-
-      {/* Mode selector: Chat vs Agent + Thinking toggle */}
-      <ModeSelector mode={chatMode} onChange={setChatMode} thinking={thinkingMode} onThinkingChange={setThinkingMode} />
-
-      {/* Indexing status bar */}
-      <IndexingStatusBar
-        status={indexingStatus}
-        onRefresh={() => postMessage({ type: 'getIndexingStatus' })}
+      <Header 
+        onNewChat={handleClearHistory}
+        onOpenAgents={() => {
+          if (hostView === 'agent-manager') {
+            setActiveView('agent-manager');
+            return;
+          }
+          postMessage({ type: 'openExternal', url: 'command:andor.openAgentManager' });
+        }}
+        onOpenMarketplace={() => setShowSettings(true)}
+        onOpenHistory={() => setActiveView('history')}
+        onOpenProfile={() => setActiveView('profile')}
+        onOpenSettings={() => setShowSettings(true)}
       />
 
-      {/* Checkpoint panel */}
-      {showCheckpoints && (
-        <div className="flex-shrink-0 px-3 py-2 overflow-y-auto max-h-40" style={{ borderBottom: '1px solid var(--vscode-panel-border)', background: 'var(--vscode-input-background)' }}>
-          <div className="text-[10px] font-semibold opacity-60 mb-1.5">Checkpoints — click to revert</div>
-          <div className="space-y-1">
-            {[...checkpoints].reverse().map(cp => (
-              <button
-                key={cp.id}
-                onClick={() => revertToCheckpoint(cp.id)}
-                className="w-full text-left text-[10px] px-2 py-1.5 rounded hover:opacity-90"
-                style={{ background: 'var(--vscode-button-secondaryBackground, #3a3a3a)', color: 'var(--vscode-foreground)' }}
-              >
-                <span className="opacity-50">{new Date(cp.timestamp).toLocaleTimeString()} · </span>
-                <span>{cp.label}</span>
-                <span className="opacity-40 ml-1">({cp.messages.length} msgs)</span>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Chat */}
-      <div className="flex-1 min-h-0 overflow-hidden">
-        <ChatPanel
-          messages={messages}
-          setMessages={setMessages}
-          contextFiles={contextFiles}
-          isLoading={isLoading}
-          setIsLoading={setIsLoading}
-          selectedModel={selectedModel}
-          postMessage={postMessage}
-          pendingSystemPromptRef={pendingSystemPromptRef}
-          onCreateCheckpoint={createCheckpoint}
-          isPuterModel={isPuterModel}
-          streamingAssistantIdRef={streamingAssistantIdRef}
-          pendingCommandApproval={pendingCommandApproval}
-          onDismissCommandApproval={() => setPendingCommandApproval(null)}
-          chatMode={chatMode}
-          thinkingMode={thinkingMode}
-        />
-      </div>
+      {renderMainView()}
     </div>
   );
 }

@@ -84,13 +84,40 @@ export class ProviderRegistry {
         return { provider, modelId };
       }
     }
-    // Search all providers for the model
-    for (const provider of this.providers.values()) {
-      const models = provider.getModels();
-      if (models.some(m => m.id === modelSpec)) {
-        return { provider, modelId: modelSpec };
+
+    const providerPrefix = modelSpec.includes('/') ? modelSpec.split('/', 1)[0] : '';
+    const providerByPrefix = providerPrefix ? this.providers.get(providerPrefix) : undefined;
+    if (providerByPrefix) {
+      const providerModels = this.getModelsForProvider(providerByPrefix.id);
+      if (providerModels.some((model) => model.id === modelSpec)) {
+        return { provider: providerByPrefix, modelId: modelSpec };
       }
     }
+
+    const exactMatches: Array<{ provider: AIProvider; modelId: string }> = [];
+    // Search all providers for the model
+    for (const provider of this.providers.values()) {
+      const models = this.getModelsForProvider(provider.id);
+      if (models.some(m => m.id === modelSpec)) {
+        exactMatches.push({ provider, modelId: modelSpec });
+      }
+    }
+
+    if (exactMatches.length === 1) {
+      return exactMatches[0];
+    }
+
+    if (exactMatches.length > 1) {
+      const preferredOrder = ['openrouter', 'openai', 'anthropic', 'google', 'nvidia', 'puter'];
+      for (const providerId of preferredOrder) {
+        const found = exactMatches.find((match) => match.provider.id === providerId);
+        if (found) {
+          return found;
+        }
+      }
+      return exactMatches[0];
+    }
+
     return undefined;
   }
 

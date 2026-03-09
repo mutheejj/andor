@@ -11,6 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.0] - 2026-03-10
+
+### Added — Agent Execution Improvements
+- **Structured sub-agent workflow** — internal agents now respond with explicit `Analysis`, `Plan`, `Execution`, `Verification`, `Blockers`, and `Completion` sections
+- **Completion state handling** — tasks can now terminate more cleanly as `COMPLETE`, `INCOMPLETE`, or `BLOCKED`
+- **Progress summaries** — sub-agents report more meaningful progress updates during execution
+
+### Added — Orchestration Improvements
+- **Stronger complexity detection** — better routing of complex requests into orchestrated multi-agent execution
+- **Higher-quality planning prompt** — planner now prefers clearer decomposition, better role selection, stronger validation, and less redundant work
+- **Structured orchestrator summary** — multi-agent runs now produce organized plan execution, verification, and blocker summaries
+
+### Changed
+- **Sub-agent prompting** now emphasizes senior-engineer behavior, root-cause analysis, explicit blockers, and verification-first outputs
+- **Failure handling** for sub-agents now returns clearer errors after retry exhaustion
+- **README** updated to document the new agent execution model and release packaging workflow
+
+---
+
 ## [0.1.0] - 2025-03-07
 
 ### Added — Multi-Provider Architecture
