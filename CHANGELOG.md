@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.1] - 2026-03-10
+
+### Changed
+- **Version bump** — incremented to 0.2.1 to resolve marketplace version conflict
+
+---
+
 ## [0.2.0] - 2026-03-10
 
 ### Added — Agent Execution Improvements

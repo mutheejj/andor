@@ -2,7 +2,7 @@
   "name": "andor",
   "displayName": "Andor",
   "description": "Advanced AI coding agent with multi-provider support, live file writes, terminal commands, and full workspace awareness",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "icon": "images/icon.jpeg",
   "galleryBanner": {
     "color": "#1e1e1e",
